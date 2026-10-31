@@ -1,0 +1,268 @@
+package tui
+
+import (
+	"context"
+	"io"
+	"log/slog"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/Kumarsujay03/pairdesk/internal/app"
+	"github.com/Kumarsujay03/pairdesk/internal/model"
+	"github.com/Kumarsujay03/pairdesk/internal/rendezvous/memory"
+	"github.com/Kumarsujay03/pairdesk/internal/store"
+)
+
+// newTestApp registers a user against a shared in-memory backend and
+// returns a ready app. The first user registered becomes the admin.
+func newTestApp(t *testing.T, mem *memory.Store, name string) *app.App {
+	t.Helper()
+	dir := t.TempDir()
+	st, err := store.Open(store.Paths{Config: filepath.Join(dir, "config"), State: filepath.Join(dir, "state"), Cache: filepath.Join(dir, "cache")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := st.Prefs()
+	p.ReducedMotion = true
+	if err := st.SavePrefs(p); err != nil {
+		t.Fatal(err)
+	}
+	a := app.New(app.Options{Backend: mem.Client(), Store: st, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	ctx := context.Background()
+	if err := a.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if a.Phase() != app.PhaseNeedLogin {
+		t.Fatalf("phase after Start = %v, want NeedLogin", a.Phase())
+	}
+	if err := a.RequestLogin(ctx, name+"@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.VerifyOTP(ctx, memory.TestOTP); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Register(ctx, name, ""); err != nil {
+		t.Fatal(err)
+	}
+	if a.Phase() != app.PhaseReady {
+		t.Fatalf("phase after Register = %v, want Ready", a.Phase())
+	}
+	t.Cleanup(a.Close)
+	return a
+}
+
+// newTestUI builds a model at 100x30 and feeds it every event queued so far.
+func newTestUI(t *testing.T, a *app.App) *ui {
+	t.Helper()
+	m := newModel(context.Background(), a, Options{Version: "test"})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	drain(m, a)
+	return m
+}
+
+// drain feeds queued app events into the model without blocking.
+func drain(m *ui, a *app.App) {
+	for {
+		select {
+		case e := <-a.Events():
+			m.Update(evMsg{e})
+		default:
+			return
+		}
+	}
+}
+
+// waitFor pumps events until the view contains want or the deadline passes.
+func waitFor(t *testing.T, m *ui, a *app.App, want string) string {
+	t.Helper()
+	deadline := time.After(3 * time.Second)
+	for {
+		if v := m.View(); strings.Contains(v, want) {
+			return v
+		}
+		select {
+		case e := <-a.Events():
+			m.Update(evMsg{e})
+		case <-deadline:
+			t.Fatalf("view never contained %q:\n%s", want, m.View())
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
+func keys(m *ui, s string) {
+	for _, r := range s {
+		m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+}
+
+func press(m *ui, k tea.KeyType) { m.Update(tea.KeyMsg{Type: k}) }
+
+func TestLoginScreenRenders(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.Open(store.Paths{Config: filepath.Join(dir, "config"), State: filepath.Join(dir, "state"), Cache: filepath.Join(dir, "cache")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := app.New(app.Options{Backend: memory.New().Client(), Store: st, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err := a.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	m := newModel(context.Background(), a, Options{Version: "test", Demo: true, ReducedMotion: true})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	drain(m, a)
+	v := m.View()
+	for _, want := range []string{bannerLines[0], "log in", "000000", "device key phrase"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("login view lacks %q:\n%s", want, v)
+		}
+	}
+	// Too-small terminals get a clear message instead of a broken layout.
+	m.Update(tea.WindowSizeMsg{Width: 40, Height: 10})
+	if !strings.Contains(m.View(), "at least 80x24") {
+		t.Errorf("small terminal message missing")
+	}
+}
+
+func TestMainViewWithEvents(t *testing.T) {
+	mem := memory.New()
+	admin := newTestApp(t, mem, "sujay03")
+	arjun := newTestApp(t, mem, "arjun")
+	m := newTestUI(t, admin)
+
+	v := m.View()
+	for _, want := range []string{"friends", "groups", "tab panes", "ctrl+c quit", "/help", "sujay03", "nobody yet"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("main view lacks %q:\n%s", want, v)
+		}
+	}
+
+	// Become friends through the real backend and let the events flow.
+	ctx := context.Background()
+	if err := admin.AddFriend(ctx, "arjun"); err != nil {
+		t.Fatal(err)
+	}
+	if err := arjun.RespondFriend(ctx, "sujay03", true); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, m, admin, "arjun is now your friend")
+	v = waitFor(t, m, admin, "● arjun")
+	if strings.Contains(v, "nobody yet") {
+		t.Errorf("friend list still empty:\n%s", v)
+	}
+
+	// A message from arjun shows up with the sender name and text.
+	dm, err := arjun.OpenDM(ctx, "sujay03")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := arjun.Send(ctx, dm, "hello from arjun, this is a reasonably long line that should wrap neatly"); err != nil {
+		t.Fatal(err)
+	}
+	v = waitFor(t, m, admin, "hello from arjun")
+	if !strings.Contains(v, "dm · arjun") {
+		t.Errorf("conversation title missing:\n%s", v)
+	}
+
+	// Slash command output lands in the chat; /me renders in italics path.
+	keys(m, "/help")
+	press(m, tea.KeyEnter)
+	if v = m.View(); !strings.Contains(v, "/theme <name>") {
+		t.Errorf("/help output missing:\n%s", v)
+	}
+
+	// Pinned announcement bar and esc to dismiss.
+	m.Update(evMsg{app.Event{Kind: app.EvAnnouncement, Text: "maintenance at midnight"}})
+	if v = m.View(); !strings.Contains(v, "maintenance at midnight") {
+		t.Errorf("announcement missing:\n%s", v)
+	}
+	press(m, tea.KeyEsc)
+	if v = m.View(); strings.Contains(v, "maintenance at midnight") {
+		t.Errorf("announcement not dismissed:\n%s", v)
+	}
+
+	// Presence: arjun comes online, dot fills.
+	m.Update(evMsg{app.Event{Kind: app.EvPresence, UserID: arjun.Me().ID, Online: true}})
+	_ = m.View()
+
+	// Access card with sudo option; "s" answers approve + ask tier.
+	replied := make(chan [2]string, 1)
+	m.Update(evMsg{app.Event{Kind: app.EvCard, Card: &app.Card{
+		ID: "c1", Kind: "access", From: arjun.Me().ID, FromName: "arjun", Scope: model.SessionBoard,
+		Text: "arjun wants to board your machine", ExpiresAt: time.Now().Add(30 * time.Second).UnixNano(),
+		Reply: func(accept bool, tier model.SudoTier) {
+			replied <- [2]string{map[bool]string{true: "accept", false: "deny"}[accept], string(tier)}
+		},
+	}}})
+	v = m.View()
+	for _, want := range []string{"access request · board", "[a]pprove", "[s] approve with sudo", "wants to board"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("card lacks %q:\n%s", want, v)
+		}
+	}
+	keys(m, "s")
+	select {
+	case r := <-replied:
+		if r[0] != "accept" || r[1] != string(model.SudoAsk) {
+			t.Errorf("card reply = %v, want accept/ask", r)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("card reply never called")
+	}
+	if v = m.View(); !strings.Contains(v, "approved") {
+		t.Errorf("approve flash missing:\n%s", v)
+	}
+
+	// Key-change event synthesises a card.
+	m.Update(evMsg{app.Event{Kind: app.EvKeyChanged, UserID: arjun.Me().ID, Text: "arjun"}})
+	if v = m.View(); !strings.Contains(v, "device key changed") || !strings.Contains(v, "[a]ccept new key") {
+		t.Errorf("keychange card missing:\n%s", v)
+	}
+
+	// Sending a message shows it dimmed as pending until the echo arrives.
+	press(m, tea.KeyEsc) // nothing to clear; harmless
+	keys(m, "hi arjun")
+	press(m, tea.KeyEnter)
+	if len(m.pending) != 1 {
+		t.Errorf("pending = %d, want 1", len(m.pending))
+	}
+}
+
+func TestNonAdminCommands(t *testing.T) {
+	mem := memory.New()
+	_ = newTestApp(t, mem, "sujay03") // admin
+	user := newTestApp(t, mem, "priya")
+	m := newTestUI(t, user)
+	keys(m, "/users")
+	press(m, tea.KeyEnter)
+	if v := m.View(); !strings.Contains(v, "only the admin can do that") {
+		t.Errorf("admin gate missing:\n%s", v)
+	}
+	keys(m, "/wat")
+	press(m, tea.KeyEnter)
+	if v := m.View(); !strings.Contains(v, "unknown command /wat") {
+		t.Errorf("unknown command line missing:\n%s", v)
+	}
+	keys(m, "/board sujay03")
+	press(m, tea.KeyEnter)
+	if v := m.View(); !strings.Contains(v, "only the admin can do that") {
+		t.Errorf("board gate missing:\n%s", v)
+	}
+	keys(m, "/logs")
+	press(m, tea.KeyEnter)
+	if v := m.View(); !strings.Contains(v, "not available in this build") {
+		t.Errorf("nil hook message missing:\n%s", v)
+	}
+	// Tab moves focus to the left pane; the status bar still shows hints.
+	press(m, tea.KeyTab)
+	if m.pane != paneLeft {
+		t.Errorf("tab did not switch panes")
+	}
+	if v := m.View(); !strings.Contains(v, "tab panes") {
+		t.Errorf("status hints missing")
+	}
+}

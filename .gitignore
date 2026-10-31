@@ -1,0 +1,10 @@
+/dist/
+/pairdesk
+/bin/
+*.test
+*.out
+.env
+
+# local only
+/PAIRDESK-SETUP*.md
+*.local.md

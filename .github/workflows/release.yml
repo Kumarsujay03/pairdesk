@@ -1,0 +1,24 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions: { contents: write }
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - name: Import signing key
+        if: ${{ env.GPG_PRIVATE_KEY != '' }}
+        env: { GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }} }
+        run: echo "$GPG_PRIVATE_KEY" | gpg --batch --import
+      - uses: goreleaser/goreleaser-action@v6
+        with: { version: "~> v2", args: release --clean }
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON: ${{ secrets.SUPABASE_ANON }}
+          GPG_FINGERPRINT: ${{ secrets.GPG_FINGERPRINT }}

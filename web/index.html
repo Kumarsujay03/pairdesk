@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PairDesk</title>
+<style>
+:root{--bg:#0b1220;--fg:#dbe4f0;--dim:#8a97aa;--accent:#2dd4bf;--amber:#f5b942;--card:#111a2b}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
+main{max-width:760px;margin:0 auto;padding:48px 16px}h1{font-size:40px;margin:0 0 4px;color:var(--accent)}
+p.tag{color:var(--dim);margin:0 0 32px}pre{background:var(--card);padding:14px 16px;border-radius:8px;overflow:auto;border:1px solid #1e2a40}
+h2{font-size:18px;margin:36px 0 8px;color:var(--amber)}ul{padding-left:20px}li{margin:4px 0}a{color:var(--accent)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}.grid div{background:var(--card);padding:12px 14px;border-radius:8px;border:1px solid #1e2a40}
+</style></head><body><main>
+<h1>PairDesk</h1>
+<p class="tag">terminal messenger for Linux people · consent-gated remote access · end-to-end encrypted · free</p>
+<pre>curl -fsSL https://pairdesk.is-a.dev/install.sh | sh
+pairdesk</pre>
+<h2>What it is</h2>
+<div class="grid">
+<div><b>Chat</b><br>unique usernames, friend requests, DMs, groups. Server stores ciphertext only.</div>
+<div><b>Remote help</b><br>the admin can watch or board a friend's terminal, or view their screen, only with consent.</div>
+<div><b>Standing grants</b><br>trust the admin once; revoke any time. Sudo stays blocked unless you say otherwise.</div>
+<div><b>Logs you own</b><br>every command, its output and every file touched, hash-chained and signed on your machine.</div>
+</div>
+<h2>Security in one paragraph</h2>
+<p>Nothing listens on your machine; every connection is outbound. Chat is encrypted with keys derived from device identities the server never sees. Remote sessions run peer to peer over WebRTC with a Noise handshake bound to those identities. The admin's own account needs a second device factor and a local passphrase. Grants are signed by you and enforced by your client, not by the server.</p>
+<h2>Source</h2>
+<p><a href="https://github.com/Kumarsujay03/pairdesk">github.com/Kumarsujay03/pairdesk</a> · MIT</p>
+</main></body></html>

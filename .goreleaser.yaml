@@ -1,0 +1,31 @@
+version: 2
+project_name: pairdesk
+before:
+  hooks:
+    - go mod tidy
+builds:
+  - id: pairdesk
+    main: ./cmd/pairdesk
+    binary: pairdesk
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.supabaseURL={{ .Env.SUPABASE_URL }}
+      - -X main.supabaseAnon={{ .Env.SUPABASE_ANON }}
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    files: [LICENSE, README.md]
+checksum:
+  name_template: checksums.txt
+signs:
+  - cmd: gpg
+    args: ["--batch", "-u", "{{ .Env.GPG_FINGERPRINT }}", "--output", "${signature}", "--detach-sign", "${artifact}"]
+    artifacts: checksum
+release:
+  draft: false
+changelog:
+  use: github

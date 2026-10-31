@@ -1,0 +1,12 @@
+name: keepalive
+# Supabase pauses free projects after a week without traffic. One request a day keeps it awake.
+on:
+  schedule: [{ cron: "17 4 * * *" }]
+  workflow_dispatch:
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -fsS "${{ secrets.SUPABASE_URL }}/rest/v1/instance_settings?select=key&limit=1" \
+            -H "apikey: ${{ secrets.SUPABASE_ANON }}" > /dev/null && echo awake
