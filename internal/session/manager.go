@@ -85,7 +85,13 @@ type Session struct {
 	cancel   context.CancelFunc
 	stopOnce sync.Once
 	reason   string
+	smu      sync.Mutex
 }
+
+func (s *Session) setState(st string) { s.smu.Lock(); s.State = st; s.smu.Unlock() }
+func (s *Session) getState() string   { s.smu.Lock(); defer s.smu.Unlock(); return s.State }
+func (s *Session) setReason(r string) { s.smu.Lock(); s.reason = r; s.smu.Unlock() }
+func (s *Session) getReason() string  { s.smu.Lock(); defer s.smu.Unlock(); return s.reason }
 
 // New wires the manager to the app's signaling.
 func New(a *app.App, lock *admin.Lock, log *slog.Logger) *Manager {
@@ -274,7 +280,7 @@ func (m *Manager) Live() []*Session {
 	defer m.mu.Unlock()
 	var out []*Session
 	for _, s := range m.sessions {
-		if s.State != "ended" {
+		if s.getState() != "ended" {
 			out = append(out, s)
 		}
 	}
@@ -311,7 +317,7 @@ func (m *Manager) onRevoke(userID string) {
 
 func (s *Session) end(reason string) {
 	s.stopOnce.Do(func() {
-		s.reason = reason
+		s.setReason(reason)
 		if s.host != nil {
 			_ = s.host.Stop()
 		}
@@ -332,22 +338,22 @@ func (m *Manager) track(s *Session) {
 
 func (m *Manager) finish(s *Session, reason string) {
 	if s.reason == "" {
-		s.reason = reason
+		s.setReason(reason)
 	}
-	s.State = "ended"
+	s.setState("ended")
 	if s.writer != nil {
-		_ = s.writer.Seal(m.app.Identity(), s.reason)
+		_ = s.writer.Seal(m.app.Identity(), s.getReason())
 	}
 	m.dropSignaler(s.ID)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = m.app.Backend().EndSession(ctx, s.ID)
 	m.app.Emit(app.Event{Kind: app.EvSession, Session: m.info(s)})
-	m.app.Notify("session:"+s.ID, "PairDesk", fmt.Sprintf("%s session with %s ended: %s", s.Kind, s.Peer.Username, s.reason), "low")
+	m.app.Notify("session:"+s.ID, "PairDesk", fmt.Sprintf("%s session with %s ended: %s", s.Kind, s.Peer.Username, s.getReason()), "low")
 }
 
 func (m *Manager) info(s *Session) *app.SessionInfo {
-	return &app.SessionInfo{ID: s.ID, Kind: s.Kind, Peer: s.Peer.ID, PeerName: s.Peer.Username, Host: s.Host, Via: s.Via, State: s.State, Error: s.reason}
+	return &app.SessionInfo{ID: s.ID, Kind: s.Kind, Peer: s.Peer.ID, PeerName: s.Peer.Username, Host: s.Host, Via: s.Via, State: s.getState(), Error: s.getReason()}
 }
 
 func (m *Manager) logsRoot() string { return filepath.Join(m.app.Store().Paths.State, "sessions") }
@@ -455,7 +461,7 @@ func (m *Manager) Request(ctx context.Context, name string, kind model.SessionKi
 		return err
 	}
 	s.conn = conn
-	s.State = "live"
+	s.setState("live")
 	_ = m.app.Backend().LogSession(ctx, model.SessionLog{ID: id, Visitor: m.app.Me().ID, Host: peer.ID, Kind: kind, Via: s.Via, StartedAt: s.Started})
 	m.app.Emit(app.Event{Kind: app.EvSession, Session: m.info(s)})
 
@@ -655,7 +661,7 @@ func (m *Manager) hostAccept(s *Session, pk crypto.PublicKey) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.cancel = cancel
 	defer cancel()
-	s.State = "connecting"
+	s.setState("connecting")
 	m.app.Emit(app.Event{Kind: app.EvSession, Session: m.info(s)})
 
 	w, err := m.newWriter(s, "host")
@@ -689,7 +695,7 @@ func (m *Manager) hostAccept(s *Session, pk crypto.PublicKey) {
 		return
 	}
 	s.conn = conn
-	s.State = "live"
+	s.setState("live")
 	_ = m.app.Backend().LogSession(ctx, model.SessionLog{ID: s.ID, Visitor: s.Peer.ID, Host: m.app.Me().ID, Kind: s.Kind, Via: s.Via, StartedAt: s.Started})
 	m.app.Emit(app.Event{Kind: app.EvSession, Session: m.info(s)})
 	m.app.Notify("live:"+s.ID, "PairDesk", fmt.Sprintf("%s is now %s", s.Peer.Username, liveVerb(s)), "critical")
@@ -748,7 +754,7 @@ func (m *Manager) hostTerminal(ctx context.Context, s *Session, conn *p2p.Conn, 
 	ch, err := conn.AcceptChannel(actx)
 	acancel()
 	if err != nil {
-		s.reason = "no channel: " + err.Error()
+		s.setReason("no channel: " + err.Error())
 		return
 	}
 	shimDir := filepath.Join(m.app.Store().Paths.Cache, "shim-"+s.ID)
@@ -786,7 +792,7 @@ func (m *Manager) hostTerminal(ctx context.Context, s *Session, conn *p2p.Conn, 
 	}
 	h, err := term.StartHost(ctx, ch, opts)
 	if err != nil {
-		s.reason = "shell: " + err.Error()
+		s.setReason("shell: " + err.Error())
 		if errors.Is(err, term.ErrNoIsolation) {
 			m.app.Emit(appNotice("session refused: this machine cannot sandbox the visitor shell. Install bubblewrap (bwrap) or enable unprivileged user namespaces."))
 		}
@@ -795,7 +801,7 @@ func (m *Manager) hostTerminal(ctx context.Context, s *Session, conn *p2p.Conn, 
 	s.host = h
 	<-h.Done()
 	if err := h.Err(); err != nil && s.reason == "" {
-		s.reason = err.Error()
+		s.setReason(err.Error())
 	}
 }
 

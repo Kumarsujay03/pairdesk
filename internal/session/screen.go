@@ -36,12 +36,12 @@ func (m *Manager) hostScreen(ctx context.Context, s *Session, conn *p2p.Conn) {
 	ch, err := conn.AcceptChannel(actx)
 	acancel()
 	if err != nil {
-		s.reason = "no input channel"
+		s.setReason("no input channel")
 		return
 	}
 	inj, err := input.NewInjector(1920, 1080)
 	if err != nil {
-		s.reason = "input: " + err.Error()
+		s.setReason("input: " + err.Error())
 		m.app.Emit(appNotice(err.Error()))
 		return
 	}

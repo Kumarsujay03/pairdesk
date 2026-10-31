@@ -137,7 +137,7 @@ func (m *Manager) serveTo(ctx context.Context, s *Session, man transfer.Manifest
 		return err
 	}
 	s.conn = conn
-	s.State = "live"
+	s.setState("live")
 	m.app.Emit(app.Event{Kind: app.EvSession, Session: m.info(s)})
 	ch, err := conn.OpenChannel(sctx, "file", true)
 	if err != nil {
@@ -183,7 +183,7 @@ func (m *Manager) hostFileCard(s *Session, pk crypto.PublicKey, c card) {
 				return
 			}
 			s.conn = conn
-			s.State = "live"
+			s.setState("live")
 			actx, acancel := context.WithTimeout(ctx, 20*time.Second)
 			ch, err := conn.AcceptChannel(actx)
 			acancel()
@@ -240,7 +240,7 @@ func (m *Manager) receiveFrom(s *Session, pk crypto.PublicKey, man transfer.Mani
 		return
 	}
 	s.conn = conn
-	s.State = "live"
+	s.setState("live")
 	m.app.Emit(app.Event{Kind: app.EvSession, Session: m.info(s)})
 	actx, acancel := context.WithTimeout(ctx, 20*time.Second)
 	ch, err := conn.AcceptChannel(actx)
@@ -255,7 +255,7 @@ func (m *Manager) receiveFrom(s *Session, pk crypto.PublicKey, man transfer.Mani
 	err = transfer.Receive(ctx, ch, man, transfer.ReceiveOptions{Dest: dest, OnProgress: func(p transfer.Progress) {
 		if time.Since(last) > 500*time.Millisecond {
 			last = time.Now()
-			s.reason = fmt.Sprintf("%d/%d chunks", p.Done, p.Total)
+			s.setReason(fmt.Sprintf("%d/%d chunks", p.Done, p.Total))
 			m.app.Emit(app.Event{Kind: app.EvSession, Session: m.info(s)})
 		}
 	}})
@@ -272,7 +272,7 @@ func (m *Manager) receiveFrom(s *Session, pk crypto.PublicKey, man transfer.Mani
 			_ = m.app.Backend().LogSession(ctx, model.SessionLog{ID: s.ID, Visitor: s.Peer.ID, Host: m.app.Me().ID, Kind: model.SessionSend, Via: model.ViaCard, StartedAt: s.Started})
 		}
 	}
-	s.reason = ""
+	s.setReason("")
 	s.end(reason)
 	m.finish(s, reason)
 }
