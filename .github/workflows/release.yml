@@ -12,7 +12,7 @@ jobs:
       - uses: actions/setup-go@v5
         with: { go-version-file: go.mod }
       - name: Import signing key
-        if: ${{ env.GPG_PRIVATE_KEY != '' }}
+        if: ${{ secrets.GPG_PRIVATE_KEY != '' }}
         env: { GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }} }
         run: echo "$GPG_PRIVATE_KEY" | gpg --batch --import
       - uses: goreleaser/goreleaser-action@v6

@@ -2,6 +2,8 @@ module github.com/Kumarsujay03/pairdesk
 
 go 1.27.2
 
+toolchain go1.27.3
+
 require (
 	filippo.io/edwards25519 v1.2.0
 	github.com/bendahl/uinput v1.7.0
