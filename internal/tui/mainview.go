@@ -62,8 +62,8 @@ func (m *ui) openConv(c *app.Conversation) {
 	}
 	m.active = c.ID
 	m.divider = ""
-	if c.Unread > 0 && c.Unread <= len(c.Msgs) {
-		m.divider = c.Msgs[len(c.Msgs)-c.Unread].ID
+	if msgs, unread := m.app.Snapshot(c); unread > 0 && unread <= len(msgs) {
+		m.divider = msgs[len(msgs)-unread].ID
 	}
 	m.app.MarkRead(c)
 	m.renderChat(true)
@@ -146,7 +146,7 @@ func (m *ui) renderChat(gotoBottom bool) {
 	var msgs []app.Msg
 	c := m.app.Conv(m.active)
 	if c != nil {
-		msgs = c.Msgs
+		msgs, _ = m.app.Snapshot(c)
 	}
 	reactions := map[string][]app.Msg{}
 	for _, mm := range msgs {
@@ -367,8 +367,8 @@ func (m *ui) viewLeft(height int) string {
 				}
 			}
 		}
-		if c := m.app.Conv(it.conv); c != nil && c.Unread > 0 {
-			tag = fmt.Sprintf("(%d)", c.Unread)
+		if n := m.app.Unread(m.app.Conv(it.conv)); n > 0 {
+			tag = fmt.Sprintf("(%d)", n)
 		}
 		lines = append(lines, m.leftRow(idx, m.dot(it.user, online), label, tag, it.conv == m.active, inner))
 		idx++
@@ -383,8 +383,8 @@ func (m *ui) viewLeft(height int) string {
 		online := m.groupOnline(it.group)
 		label := fmt.Sprintf("#%s", it.label)
 		tag := fmt.Sprintf("(%d●)", online)
-		if c := m.app.Conv(it.conv); c != nil && c.Unread > 0 {
-			tag += fmt.Sprintf(" %d", c.Unread)
+		if n := m.app.Unread(m.app.Conv(it.conv)); n > 0 {
+			tag += fmt.Sprintf(" %d", n)
 		}
 		lines = append(lines, m.leftRow(idx, " ", label, tag, it.conv == m.active, inner))
 		idx++

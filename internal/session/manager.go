@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"time"
 
@@ -32,6 +33,10 @@ const (
 	controlExpiry  = 30 * time.Minute
 	connectTimeout = 45 * time.Second
 )
+
+// sessionIDRe is the only shape a session id may have; ids are used in
+// file paths and map keys, so anything else from the wire is dropped.
+var sessionIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]{16}$`)
 
 var DefaultSTUN = []string{"stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"}
 
@@ -60,6 +65,7 @@ type Manager struct {
 	sigs     map[string]chan rendezvous.Signal
 	pending  map[string]chan cardReply // visitor side waits here
 	seedMap  map[string]seedEntry
+	inflight map[string]int
 }
 
 // Session is one live or finished session.
@@ -124,9 +130,31 @@ func (m *Manager) dropSignaler(id string) {
 }
 
 func (m *Manager) onSignal(sig rendezvous.Signal) {
+	if !sessionIDRe.MatchString(sig.SessionID) || sig.From == "" {
+		m.log.Warn("signal with bad session id dropped", "from", sig.From)
+		return
+	}
 	switch sig.Type {
 	case "card":
-		go m.onCard(sig)
+		m.mu.Lock()
+		if m.inflight == nil {
+			m.inflight = map[string]int{}
+		}
+		if m.inflight[sig.From] >= 3 {
+			m.mu.Unlock()
+			m.log.Warn("too many pending cards from peer", "from", sig.From)
+			return
+		}
+		m.inflight[sig.From]++
+		m.mu.Unlock()
+		go func() {
+			defer func() {
+				m.mu.Lock()
+				m.inflight[sig.From]--
+				m.mu.Unlock()
+			}()
+			m.onCard(sig)
+		}()
 		return
 	case "card_reply":
 		m.mu.Lock()
@@ -134,7 +162,7 @@ func (m *Manager) onSignal(sig rendezvous.Signal) {
 		m.mu.Unlock()
 		if ch != nil {
 			var r cardReply
-			if pt, err := m.open(sig.From, sig.SessionID, sig.Payload); err == nil && json.Unmarshal(pt, &r) == nil {
+			if pt, err := m.open(sig.From, sig.SessionID, "card_reply", sig.Payload); err == nil && json.Unmarshal(pt, &r) == nil {
 				select {
 				case ch <- r:
 				default:
@@ -186,20 +214,26 @@ func (m *Manager) pairwise(ctx context.Context, peer string) ([crypto.KeySize]by
 	return k, pk, err
 }
 
-func (m *Manager) seal(ctx context.Context, peer, sessionID string, v any) ([]byte, error) {
+// cardAAD binds a card to its session, direction and type so the relay
+// cannot reflect or re-label it.
+func cardAAD(sessionID, from, to, typ string) []byte {
+	return []byte("card:" + sessionID + ":" + from + ":" + to + ":" + typ)
+}
+
+func (m *Manager) seal(ctx context.Context, peer, sessionID, typ string, v any) ([]byte, error) {
 	k, _, err := m.pairwise(ctx, peer)
 	if err != nil {
 		return nil, err
 	}
 	pt, _ := json.Marshal(v)
-	nonce, ct, err := crypto.Seal(k, []byte("card:"+sessionID), pt)
+	nonce, ct, err := crypto.Seal(k, cardAAD(sessionID, m.app.Me().ID, peer, typ), pt)
 	if err != nil {
 		return nil, err
 	}
 	return append(nonce, ct...), nil
 }
 
-func (m *Manager) open(peer, sessionID string, b []byte) ([]byte, error) {
+func (m *Manager) open(peer, sessionID, typ string, b []byte) ([]byte, error) {
 	k, _, err := m.pairwise(context.Background(), peer)
 	if err != nil {
 		return nil, err
@@ -207,7 +241,7 @@ func (m *Manager) open(peer, sessionID string, b []byte) ([]byte, error) {
 	if len(b) < crypto.NonceSize {
 		return nil, crypto.ErrDecrypt
 	}
-	return crypto.Open(k, []byte("card:"+sessionID), b[:crypto.NonceSize], b[crypto.NonceSize:])
+	return crypto.Open(k, cardAAD(sessionID, peer, m.app.Me().ID, typ), b[:crypto.NonceSize], b[crypto.NonceSize:])
 }
 
 func (m *Manager) p2pConfig(id string) p2p.Config {
@@ -375,7 +409,7 @@ func (m *Manager) Request(ctx context.Context, name string, kind model.SessionKi
 	m.pending[id] = reply
 	m.mu.Unlock()
 	c := card{Kind: kind, Control: control, Via: s.Via, Name: m.app.Me().Username, At: time.Now().Unix()}
-	payload, err := m.seal(ctx, peer.ID, id, c)
+	payload, err := m.seal(ctx, peer.ID, id, "card", c)
 	if err != nil {
 		m.finish(s, err.Error())
 		return err
@@ -497,7 +531,7 @@ func (m *Manager) onCard(sig rendezvous.Signal) {
 	if err != nil {
 		return
 	}
-	pt, err := m.open(sig.From, sig.SessionID, sig.Payload)
+	pt, err := m.open(sig.From, sig.SessionID, "card", sig.Payload)
 	if err != nil {
 		m.log.Warn("card: cannot open", "from", from.Username, "err", err)
 		return
@@ -510,16 +544,17 @@ func (m *Manager) onCard(sig rendezvous.Signal) {
 		return // stale replay
 	}
 	deny := func(reason string) {
-		b, err := m.seal(context.Background(), sig.From, sig.SessionID, cardReply{Accept: false, Reason: reason})
+		b, err := m.seal(context.Background(), sig.From, sig.SessionID, "card_reply", cardReply{Accept: false, Reason: reason})
 		if err == nil {
 			_ = m.app.Backend().SendSignal(context.Background(), rendezvous.Signal{SessionID: sig.SessionID, From: m.app.Me().ID, To: sig.From, Type: "card_reply", Payload: b})
 		}
 	}
 	// Who may ask what. Terminal and screen: admin (with the pinned admin
 	// key) or a helper who is my friend. File drop: any friend.
-	settings := m.app.Settings()
-	isAdmin := from.Role == model.RoleAdmin && settings.AdminPubKey != "" && from.PubKey == settings.AdminPubKey
-	isHelper := from.Role == model.RoleHelper && m.app.IsFriend(from.ID)
+	// Admin status is decided by the key this device pinned, not by the
+	// server's role column; a suspect (changed) key never qualifies.
+	isAdmin := m.app.IsTrustedAdmin(from) && !m.app.Suspect(from.ID)
+	isHelper := from.Role == model.RoleHelper && m.app.IsFriend(from.ID) && !m.app.Suspect(from.ID)
 	switch c.Kind {
 	case model.SessionWatch, model.SessionBoard, model.SessionScreen:
 		if !isAdmin && !isHelper {
@@ -701,7 +736,7 @@ func liveVerb(s *Session) string {
 }
 
 func (m *Manager) replyCard(s *Session, r cardReply) {
-	b, err := m.seal(context.Background(), s.Peer.ID, s.ID, r)
+	b, err := m.seal(context.Background(), s.Peer.ID, s.ID, "card_reply", r)
 	if err != nil {
 		return
 	}
@@ -718,9 +753,11 @@ func (m *Manager) hostTerminal(ctx context.Context, s *Session, conn *p2p.Conn, 
 	}
 	shimDir := filepath.Join(m.app.Store().Paths.Cache, "shim-"+s.ID)
 	opts := term.HostOptions{
-		ReadOnly: s.Kind == model.SessionWatch,
-		SudoTier: s.Sudo,
-		ShimDir:  shimDir,
+		ReadOnly:    s.Kind == model.SessionWatch,
+		SudoTier:    s.Sudo,
+		ShimDir:     shimDir,
+		Isolate:     term.IsolateRequired,
+		HiddenPaths: []string{m.app.Store().Paths.Config, m.app.Store().Paths.State, m.app.Store().Paths.Cache},
 		Env:      append(os.Environ(), "PAIRDESK_SESSION="+s.ID, "PAIRDESK_VISITOR="+s.Peer.Username),
 		OnOutput: func(_ time.Time, b []byte) { _ = w.Output(b) },
 		OnCommand: func(c term.CommandEvent) {
@@ -875,8 +912,26 @@ func (m *Manager) Store() *store.Store { return m.app.Store() }
 // Logs lists sessions recorded on this machine.
 func (m *Manager) Logs() ([]sessionlog.Entry, error) { return sessionlog.List(m.logsRoot()) }
 
-// Verify checks a session's chain and seal.
-func (m *Manager) Verify(dir string) (sessionlog.VerifyResult, error) { return sessionlog.Verify(dir, nil) }
+// Verify checks a session's chain and seal against the key that must have
+// signed it: this device's for host copies, the pinned visitor key for
+// visitor copies. The key recorded inside the file is never trusted.
+func (m *Manager) Verify(dir string) (sessionlog.VerifyResult, error) {
+	meta, err := sessionlog.ReadMeta(dir)
+	if err != nil {
+		return sessionlog.VerifyResult{}, err
+	}
+	var pub crypto.PublicKey
+	switch meta.Role {
+	case "host":
+		pub = m.app.Identity().Public()
+	case "visitor":
+		pub = m.app.Identity().Public()
+	}
+	if pub == nil {
+		return sessionlog.VerifyResult{}, errors.New("unknown log role")
+	}
+	return sessionlog.Verify(dir, pub)
+}
 
 // Replay plays a transcript back in the real terminal.
 func (m *Manager) Replay(ctx context.Context, dir string, speed float64) error {

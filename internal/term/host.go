@@ -3,8 +3,10 @@ package term
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -17,7 +19,6 @@ import (
 
 	"github.com/creack/pty"
 
-	"github.com/Kumarsujay03/pairdesk/internal/crypto"
 	"github.com/Kumarsujay03/pairdesk/internal/model"
 	"github.com/Kumarsujay03/pairdesk/internal/p2p"
 )
@@ -27,7 +28,19 @@ type HostOptions struct {
 	Shell    string         // default $SHELL or /bin/bash
 	ReadOnly bool           // watch: discard visitor input
 	SudoTier model.SudoTier // blocked (default), ask or auto; see PAIRDESK.md 4.7
-	ShimDir  string         // where the sudo shim, rc files and FIFO live (default: private temp dir, 0700)
+	ShimDir  string         // holds bin/ (shim, rc files) and ipc/ (FIFOs); default: private temp dir, 0700
+
+	// Isolate says whether the visitor shell must run in its own user,
+	// PID and mount namespaces (see sandboxPlan). The zero value requires
+	// it. ReadOnly sessions follow the same rule.
+	Isolate IsolationMode
+	// HiddenPaths are directories the visitor shell must not reach: the
+	// caller passes the PairDesk config, state and cache dirs. Each is
+	// covered by an empty tmpfs inside the sandbox. ShimDir/ipc is always
+	// hidden. Note that a consented sudo is still root: hiding protects
+	// against the unprivileged visitor, not against the commands the host
+	// approves.
+	HiddenPaths []string
 
 	OnCommand func(CommandEvent)      // each command the visitor ran, once its exit code is known
 	OnOutput  func(time.Time, []byte) // redacted output as it is sent to the visitor (for asciicast)
@@ -37,39 +50,57 @@ type HostOptions struct {
 	OnSudo func(cmd string) bool
 	// SudoPassword supplies the host's password for sudo in the auto tier
 	// and for consented commands in the blocked tier. It is handed to real
-	// sudo through SUDO_ASKPASS and never written to the transcript or log.
-	// When nil in the blocked tier, a consented command runs real sudo with
-	// its prompt shown to the visitor, who must then know the password.
+	// sudo through SUDO_ASKPASS, outside the sandbox, and never written to
+	// the transcript, the log or anywhere the visitor can read. When nil
+	// (or it returns ok=false) in the blocked tier, a consented command
+	// runs real sudo with its prompt shown to the visitor, who must then
+	// know the password.
 	SudoPassword func() (string, bool)
 	// OnShareRequest is called when the visitor asks for a shared terminal
 	// (frame 4). Return true to enable it. Nil denies.
 	OnShareRequest func() bool
 
-	Env []string // default os.Environ()
-	Dir string   // default $HOME
+	// Env is the environment to derive the visitor's from (default
+	// os.Environ()). Only whitelisted variables reach the shell; see
+	// scrubEnv.
+	Env []string
+	Dir string // default $HOME
 
 	realSudo string // tests only: path used as the real sudo binary
 }
 
 // Host is one PTY session served to a visitor.
 type Host struct {
-	opt    HostOptions
-	ch     p2p.Channel
-	cmd    *exec.Cmd
-	ptmx   *os.File
-	shim   string
-	ownDir bool
-	events *os.File
-	marker string
+	opt      HostOptions
+	ch       p2p.Channel
+	cmd      *exec.Cmd // the sandbox wrapper, or the shell when not isolated
+	ptmx     *os.File
+	shim     string // ShimDir
+	ownDir   bool
+	isolated bool
+	events   *os.File // ipc/events, held O_RDWR so writers never block on open
+	replies  *os.File // reply FIFO, held O_RDWR; the shell gets a read end as fd 4
+	realSudo string
+	sudoEnv  []string // environment for host-run sudo
+	home     string
 
-	wmu sync.Mutex // channel writes
+	wmu   sync.Mutex // channel writes
+	outMu sync.Mutex // redact+send of one output chunk
 
 	stateMu  sync.Mutex
 	cur      *CommandEvent // command in flight (hook "pre" seen)
 	tokens   map[string]bool
-	sudoCmds map[string]string
 	typist   string
 	shared   bool
+	cols     uint16
+	rows     uint16
+	relay    *os.File  // inner PTY of a running host-run sudo, or nil
+	relayCmd *exec.Cmd // its process
+	// heldPassword is the blocked-tier card's password for the sudo in
+	// flight; consumed by answerPassword, cleared when the sudo ends.
+	heldPassword string
+
+	sudoMu sync.Mutex // one host-run sudo at a time
 
 	transcript *teeBuffer
 	redact     *redactor
@@ -78,6 +109,36 @@ type Host struct {
 	doneOnce sync.Once
 	stopOnce sync.Once
 	err      error
+}
+
+// envKeep is the whitelist of variables that reach the visitor shell. The
+// rest of the host's environment, in particular SSH_AUTH_SOCK,
+// DBUS_SESSION_BUS_ADDRESS, GPG_AGENT_INFO, SUDO_ASKPASS and anything
+// pointing at credentials or agents, is dropped. LC_* and PAIRDESK_* are
+// kept by prefix.
+var envKeep = map[string]bool{
+	"PATH": true, "HOME": true, "USER": true, "LOGNAME": true, "SHELL": true,
+	"TERM": true, "LANG": true, "COLORTERM": true, "XDG_RUNTIME_DIR": true,
+	"DISPLAY": true, "WAYLAND_DISPLAY": true,
+}
+
+// scrubEnv applies envKeep to env, keeping the first value of each name
+// and the original order.
+func scrubEnv(env []string) (map[string]string, []string) {
+	envm := map[string]string{}
+	var order []string
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		if !(envKeep[k] || strings.HasPrefix(k, "LC_") || strings.HasPrefix(k, "PAIRDESK_")) {
+			continue
+		}
+		if _, seen := envm[k]; seen {
+			continue
+		}
+		order = append(order, k)
+		envm[k] = v
+	}
+	return envm, order
 }
 
 // StartHost spawns the shell on a PTY and bridges it over ch. The shell's
@@ -98,21 +159,19 @@ func StartHost(ctx context.Context, ch p2p.Channel, opt HostOptions) (*Host, err
 		opt:        opt,
 		ch:         ch,
 		tokens:     map[string]bool{},
-		sudoCmds:   map[string]string{},
 		typist:     "visitor",
 		transcript: newTeeBuffer(),
 		done:       make(chan struct{}),
+		cols:       80,
+		rows:       24,
 	}
-	// The marker is an OSC sequence terminals ignore, so the visitor sees a
-	// normal prompt while the transcript can spot it reliably.
-	h.marker = "\x1b]pairdesk-sudo-" + hex.EncodeToString([]byte(crypto.RandomID(6))) + "\x07[sudo] password for host: "
 	h.redact = newRedactor(writerFunc(func(p []byte) (int, error) {
 		h.transcript.Write(p)
 		if opt.OnOutput != nil {
 			opt.OnOutput(time.Now(), append([]byte{}, p...))
 		}
 		return len(p), nil
-	}), h.marker)
+	}))
 
 	dir := opt.ShimDir
 	if dir == "" {
@@ -126,79 +185,144 @@ func StartHost(ctx context.Context, ch p2p.Channel, opt HostOptions) (*Host, err
 		return nil, err
 	}
 	h.shim = dir
-	if err := writeShimDir(dir); err != nil {
+	bin, ipc := filepath.Join(dir, dirBin), filepath.Join(dir, dirIPC)
+	fail := func(err error) (*Host, error) {
+		if h.events != nil {
+			_ = h.events.Close()
+		}
+		if h.replies != nil {
+			_ = h.replies.Close()
+		}
 		h.cleanupDir()
 		return nil, err
 	}
-	ev, err := os.OpenFile(filepath.Join(dir, fileEvents), os.O_RDWR, 0)
+	if err := writeShimDir(dir); err != nil {
+		return fail(err)
+	}
+	ev, err := os.OpenFile(filepath.Join(ipc, fileEvents), os.O_RDWR, 0)
 	if err != nil {
-		h.cleanupDir()
-		return nil, err
+		return fail(err)
 	}
 	h.events = ev
+	// The reply FIFO lives in ipc too, but the shell only ever sees it as
+	// an inherited fd, so it may be hidden with the rest of ipc.
+	replyPath := filepath.Join(ipc, "reply")
+	if err := syscall.Mkfifo(replyPath, 0o600); err != nil {
+		return fail(fmt.Errorf("term: mkfifo reply: %w", err))
+	}
+	rp, err := os.OpenFile(replyPath, os.O_RDWR, 0)
+	if err != nil {
+		return fail(err)
+	}
+	h.replies = rp
 
-	realSudo := opt.realSudo
-	if realSudo == "" {
-		if p, err := exec.LookPath("sudo"); err == nil {
-			realSudo = p
-		} else {
-			realSudo = "/usr/bin/sudo"
-		}
+	// Resolve real sudo on the host side, on a PATH that cannot contain
+	// ShimDir, so the visitor can never pick the binary that gets the
+	// host's password.
+	h.realSudo = opt.realSudo
+	if h.realSudo == "" {
+		h.realSudo = lookupRealSudo(dir)
 	}
 
-	env := opt.Env
-	if env == nil {
-		env = os.Environ()
+	base := opt.Env
+	if base == nil {
+		base = os.Environ()
 	}
-	envm := map[string]string{}
-	var order []string
-	for _, kv := range env {
-		k, v, _ := strings.Cut(kv, "=")
-		if _, seen := envm[k]; !seen {
-			order = append(order, k)
-		}
-		envm[k] = v
-	}
+	envm, order := scrubEnv(base)
 	set := func(k, v string) {
 		if _, seen := envm[k]; !seen {
 			order = append(order, k)
 		}
 		envm[k] = v
 	}
-	set("PATH", dir+string(os.PathListSeparator)+envm["PATH"])
-	set(envHook, filepath.Join(dir, fileEvents))
-	set(envShimDir, dir)
-	set(envRealSudo, realSudo)
-	set(envMarker, h.marker)
+	hostPath := envm["PATH"]
+	if hostPath == "" {
+		hostPath = "/usr/local/bin:/usr/bin:/bin"
+	}
+	set("PATH", bin+string(os.PathListSeparator)+hostPath)
+	set("SHELL", shell)
 	if envm["TERM"] == "" {
 		set("TERM", "xterm-256color")
 	}
+	if envm["HOME"] == "" {
+		if hd, err := os.UserHomeDir(); err == nil {
+			set("HOME", hd)
+		}
+	}
+	h.home = envm["HOME"]
 
 	var args []string
 	switch filepath.Base(shell) {
 	case "bash":
-		args = []string{"--rcfile", filepath.Join(dir, fileBashrc), "-i"}
+		args = []string{"--rcfile", filepath.Join(bin, fileBashrc), "-i"}
 	case "zsh":
-		set("ZDOTDIR", filepath.Join(dir, dirZsh))
+		set("ZDOTDIR", filepath.Join(bin, dirZsh))
 		args = []string{"-i"}
 	case "fish":
-		args = []string{"-i", "--init-command", "source " + shellQuote(filepath.Join(dir, fileFish))}
+		args = []string{"-i", "--init-command", "source " + shellQuote(filepath.Join(bin, fileFish))}
 	default:
 		args = []string{"-i"}
 	}
-	cmd := exec.Command(shell, args...)
+	var env []string
+	for _, k := range order {
+		env = append(env, k+"="+envm[k])
+	}
+	// Host-run sudo gets the same scrubbed environment minus the shim
+	// PATH entry, plus the askpass helper. sudo resets the command's
+	// environment itself; this is what sudo and askpass see.
+	for _, kv := range env {
+		switch {
+		case strings.HasPrefix(kv, "PATH="):
+			h.sudoEnv = append(h.sudoEnv, "PATH="+hostPath)
+		case strings.HasPrefix(kv, "ZDOTDIR="):
+		default:
+			h.sudoEnv = append(h.sudoEnv, kv)
+		}
+	}
+	h.sudoEnv = append(h.sudoEnv, "SUDO_ASKPASS="+filepath.Join(bin, fileAskpass))
+
+	argv := append([]string{shell}, args...)
+	if opt.Isolate != IsolateOff {
+		hidden := append(append([]string{}, opt.HiddenPaths...), ipc)
+		plan, perr := buildSandbox(shell, args, hidden, bin)
+		if perr == nil {
+			perr = plan.probe(ctx, env)
+		}
+		switch {
+		case perr == nil:
+			argv = plan.argv
+			h.isolated = true
+		case opt.Isolate == IsolateRequired:
+			return fail(fmt.Errorf("%w: %v", ErrNoIsolation, perr))
+		}
+	}
+
+	// Drop any credentials sudo cached for this user before the visitor
+	// gets a shell, and run every sudo with -k (see runSudo), so one
+	// consented command never turns into 15 minutes of root.
+	h.sudoReset(ctx)
+
+	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = opt.Dir
 	if cmd.Dir == "" {
-		cmd.Dir = envm["HOME"]
+		cmd.Dir = h.home
 	}
-	for _, k := range order {
-		cmd.Env = append(cmd.Env, k+"="+envm[k])
-	}
-	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
+	cmd.Env = env
+	evW, err := os.OpenFile(filepath.Join(ipc, fileEvents), os.O_WRONLY, 0)
 	if err != nil {
-		_ = ev.Close()
-		h.cleanupDir()
-		return nil, err
+		return fail(err)
+	}
+	rpR, err := os.OpenFile(replyPath, os.O_RDONLY, 0)
+	if err != nil {
+		_ = evW.Close()
+		return fail(err)
+	}
+	cmd.ExtraFiles = []*os.File{evW, rpR} // fd 3, fd 4 in the shell
+	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: h.rows, Cols: h.cols})
+	_ = evW.Close()
+	_ = rpR.Close()
+	if err != nil {
+		return fail(err)
 	}
 	h.cmd, h.ptmx = cmd, ptmx
 
@@ -215,6 +339,50 @@ func StartHost(ctx context.Context, ch p2p.Channel, opt HostOptions) (*Host, err
 	return h, nil
 }
 
+// lookupRealSudo finds the sudo binary on a PATH that excludes shimDir,
+// preferring /usr/bin/sudo.
+func lookupRealSudo(shimDir string) string {
+	if st, err := os.Stat("/usr/bin/sudo"); err == nil && !st.IsDir() {
+		return "/usr/bin/sudo"
+	}
+	var parts []string
+	for _, p := range filepath.SplitList(os.Getenv("PATH")) {
+		if p == "" || strings.HasPrefix(p, shimDir) {
+			continue
+		}
+		parts = append(parts, p)
+	}
+	for _, p := range parts {
+		cand := filepath.Join(p, "sudo")
+		if st, err := os.Stat(cand); err == nil && !st.IsDir() && st.Mode()&0o111 != 0 {
+			return cand
+		}
+	}
+	return "/usr/bin/sudo"
+}
+
+// sudoReset runs `sudo -K` as the host user so no cached credentials are
+// available when the session starts. It runs from the host process (the
+// cache is per user, and every sudo of this session is run by the host
+// process anyway), never prompts, and failures are ignored.
+func (h *Host) sudoReset(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, h.realSudo, "-K")
+	cmd.Env = h.sudoEnv
+	cmd.Stdin = nil
+	_ = cmd.Run()
+}
+
+// randomHex returns 2n hex characters from crypto/rand.
+func randomHex(n int) string {
+	b := make([]byte, n)
+	if _, err := io.ReadFull(rand.Reader, b); err != nil {
+		panic("crypto/rand failed: " + err.Error())
+	}
+	return hex.EncodeToString(b)
+}
+
 type writerFunc func([]byte) (int, error)
 
 func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
@@ -225,10 +393,8 @@ func (h *Host) cleanupDir() {
 	if h.ownDir {
 		_ = os.RemoveAll(h.shim)
 	} else {
-		for _, f := range []string{fileEvents, fileSudo, fileAskpass, fileBashrc, fileFish} {
-			_ = os.Remove(filepath.Join(h.shim, f))
-		}
-		_ = os.RemoveAll(filepath.Join(h.shim, dirZsh))
+		_ = os.RemoveAll(filepath.Join(h.shim, dirBin))
+		_ = os.RemoveAll(filepath.Join(h.shim, dirIPC))
 	}
 }
 
@@ -238,6 +404,15 @@ func (h *Host) send(typ byte, payload []byte) error {
 	return WriteFrame(h.ch, typ, payload)
 }
 
+// output passes one chunk through the redactor (transcript) and on to the
+// visitor, atomically with respect to other chunks.
+func (h *Host) output(p []byte) error {
+	h.outMu.Lock()
+	defer h.outMu.Unlock()
+	_, _ = h.redact.Write(p)
+	return h.send(FrameData, p)
+}
+
 // pumpOutput copies PTY output to the transcript and the visitor. When the
 // shell exits the PTY read fails and the session is torn down.
 func (h *Host) pumpOutput() {
@@ -245,8 +420,7 @@ func (h *Host) pumpOutput() {
 	for {
 		n, err := h.ptmx.Read(buf)
 		if n > 0 {
-			_, _ = h.redact.Write(buf[:n])
-			if err := h.send(FrameData, buf[:n]); err != nil {
+			if err := h.output(buf[:n]); err != nil {
 				h.finish(err)
 				return
 			}
@@ -256,6 +430,21 @@ func (h *Host) pumpOutput() {
 			return
 		}
 	}
+}
+
+// writeInput delivers typed bytes to whatever currently owns the visitor's
+// keyboard: the host-run sudo's PTY while one is running, else the shell.
+func (h *Host) writeInput(p []byte) error {
+	h.stateMu.Lock()
+	relay := h.relay
+	h.stateMu.Unlock()
+	if relay != nil {
+		if _, err := relay.Write(p); err == nil {
+			return nil
+		}
+	}
+	_, err := h.ptmx.Write(p)
+	return err
 }
 
 func (h *Host) pumpInput() {
@@ -273,7 +462,7 @@ func (h *Host) pumpInput() {
 			h.stateMu.Lock()
 			h.typist = "visitor"
 			h.stateMu.Unlock()
-			if _, err := h.ptmx.Write(payload); err != nil {
+			if err := h.writeInput(payload); err != nil {
 				h.finish(err)
 				return
 			}
@@ -295,7 +484,10 @@ func (h *Host) pumpInput() {
 	}
 }
 
-// pumpEvents reads lines from the hook FIFO.
+// pumpEvents reads lines from the events FIFO. Everything on it comes
+// from the visitor's side (hooks, shim) except "pw", which the askpass
+// helper writes from outside the sandbox; none of it is trusted beyond
+// what the tier and the token check allow.
 func (h *Host) pumpEvents() {
 	sc := bufio.NewScanner(h.events)
 	sc.Buffer(make([]byte, 64*1024), 1<<20)
@@ -329,35 +521,25 @@ func (h *Host) handleEvent(line string) {
 		ev.Exit = code
 		h.emit(*ev)
 	case "sudo":
-		if len(f) < 3 {
+		if len(f) < 4 {
 			return
 		}
-		id := f[1]
-		cmd := strings.Join(f[2:], "\t")
+		args, ok := decodeHexArgs(f[3])
+		if !ok {
+			h.reply(f[1], "deny", "pairdesk: sudo shim: malformed request")
+			return
+		}
 		h.stateMu.Lock()
 		if h.cur != nil {
 			h.cur.Sudo = true
 		}
 		h.stateMu.Unlock()
-		go h.decideSudo(id, cmd)
-	case "sudoexit":
-		if len(f) < 3 {
-			return
-		}
-		code, _ := strconv.Atoi(f[2])
-		h.stateMu.Lock()
-		standalone := h.cur == nil
-		h.stateMu.Unlock()
-		if standalone {
-			// No shell hooks (plain sh): the shim is the only source.
-			h.emit(CommandEvent{Time: time.Now(), Cmd: "sudo " + h.sudoCmd(f[1]), Exit: code, Sudo: true, Typist: "visitor"})
-		}
-		h.forgetSudo(f[1])
+		go h.runSudo(f[1], f[2], args)
 	case "pw":
-		if len(f) < 3 {
+		if len(f) < 2 {
 			return
 		}
-		h.answerPassword(f[1], f[2])
+		go h.answerPassword(f[1])
 	}
 }
 
@@ -368,77 +550,202 @@ func (h *Host) emit(ev CommandEvent) {
 	_ = h.send(FrameCommand, encodeCommand(ev))
 }
 
-// decideSudo applies the host's tier to one shim request and writes the
-// verdict to the shim's reply FIFO.
-func (h *Host) decideSudo(id, cmd string) {
-	_ = h.send(FrameSudo, []byte(`{"cmd":`+strconv.Quote(cmd)+`}`))
-	h.stateMu.Lock()
-	h.sudoCmds[id] = cmd
-	h.stateMu.Unlock()
+// reply writes one verdict line for the shim with the given id.
+func (h *Host) reply(id, kind, rest string) {
+	_, _ = h.replies.WriteString(id + "\t" + kind + "\t" + rest + "\n")
+}
 
-	verdict := "deny:pairdesk: sudo needs the host's consent"
-	askpass := func() string {
-		tok := crypto.RandomID(16)
-		h.stateMu.Lock()
-		h.tokens[tok] = true
-		h.stateMu.Unlock()
-		return "askpass:" + tok
-	}
+// runSudo applies the host's tier to one shim request and, when allowed,
+// runs real sudo itself: outside the sandbox, on a fresh PTY whose output
+// goes to the visitor and which receives the visitor's keystrokes until
+// sudo exits. Real sudo is always run with -k, so it neither uses nor
+// refreshes the credential cache: every invocation needs the password
+// again (from the host via askpass, or typed by the visitor in the ask
+// tier).
+//
+// What this cannot prevent: a visitor who knows the host's password (ask
+// tier) or has NOPASSWD in sudoers can run /usr/bin/sudo directly inside
+// the sandbox; the transcript and command log still record it, and the
+// tier card is only skipped, never the record.
+func (h *Host) runSudo(id, cwd string, args []string) {
+	h.sudoMu.Lock()
+	defer h.sudoMu.Unlock()
+
+	cmdStr := strings.Join(args, " ")
+	_ = h.send(FrameSudo, []byte(`{"cmd":`+strconv.Quote(cmdStr)+`}`))
+
+	const (
+		modeDeny = iota
+		modePrompt
+		modeAskpass
+	)
+	mode, denyMsg := modeDeny, "pairdesk: sudo needs the host's consent"
 	switch h.opt.SudoTier {
 	case model.SudoAsk:
-		verdict = "allow"
+		mode = modePrompt
 	case model.SudoAuto:
 		if h.opt.SudoPassword != nil {
-			verdict = askpass()
+			mode = modeAskpass
 		} else {
-			verdict = "deny:pairdesk: sudo is unavailable: the host has not stored a password"
+			denyMsg = "pairdesk: sudo is unavailable: the host has not stored a password"
 		}
 	default: // blocked
-		if h.opt.OnSudo != nil && h.opt.OnSudo(cmd) {
+		if h.opt.OnSudo != nil && h.opt.OnSudo(cmdStr) {
+			mode = modePrompt
 			if h.opt.SudoPassword != nil {
-				verdict = askpass()
-			} else {
-				verdict = "allow"
+				if pw, ok := h.opt.SudoPassword(); ok {
+					mode = modeAskpass
+					// Hold this one password for the askpass helper of
+					// this invocation only.
+					h.stateMu.Lock()
+					h.heldPassword = pw
+					h.stateMu.Unlock()
+				}
 			}
 		}
 	}
-	h.replyFIFO(filepath.Join(h.shim, "resp."+id), verdict)
+
+	rc := 1
+	if mode == modeDeny {
+		h.reply(id, "deny", denyMsg)
+	} else {
+		rc = h.execSudo(mode == modeAskpass, cwd, args)
+		h.reply(id, "done", strconv.Itoa(rc))
+	}
+	h.stateMu.Lock()
+	h.heldPassword = ""
+	standalone := h.cur == nil
+	h.stateMu.Unlock()
+	if standalone {
+		// No shell hooks (plain sh): the shim is the only source.
+		h.emit(CommandEvent{Time: time.Now(), Cmd: "sudo " + cmdStr, Cwd: cwd, Exit: rc, Sudo: true, Typist: "visitor"})
+	}
 }
 
-func (h *Host) answerPassword(id, token string) {
+// execSudo runs real sudo on a relayed PTY and returns its exit code.
+func (h *Host) execSudo(askpass bool, cwd string, args []string) int {
+	marker := markerPrefix + randomHex(markerHexLen/2) + markerSuffix
+	h.redact.issue(marker)
+	defer h.redact.retire(marker)
+
+	argv := []string{h.realSudo, "-k"}
+	tok := ""
+	if askpass {
+		tok = randomHex(16)
+		h.stateMu.Lock()
+		h.tokens[tok] = true
+		h.stateMu.Unlock()
+		defer func() {
+			h.stateMu.Lock()
+			delete(h.tokens, tok)
+			h.stateMu.Unlock()
+		}()
+		argv = append(argv, "-A", "-p", askpassPromptPrefix+tok)
+	} else {
+		argv = append(argv, "-p", marker)
+	}
+	argv = append(argv, args...)
+
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Env = h.sudoEnv
+	cmd.Dir = h.home
+	if filepath.IsAbs(cwd) && !h.hidden(cwd) {
+		if st, err := os.Stat(cwd); err == nil && st.IsDir() {
+			cmd.Dir = cwd
+		}
+	}
+	h.stateMu.Lock()
+	size := &pty.Winsize{Rows: h.rows, Cols: h.cols}
+	h.stateMu.Unlock()
+	inner, err := pty.StartWithSize(cmd, size)
+	if err != nil {
+		_ = h.output([]byte("pairdesk: cannot run sudo: " + err.Error() + "\r\n"))
+		return 1
+	}
+	h.stateMu.Lock()
+	h.relay, h.relayCmd = inner, cmd
+	h.stateMu.Unlock()
+
+	buf := make([]byte, 32*1024)
+	for {
+		n, err := inner.Read(buf)
+		if n > 0 {
+			_ = h.output(buf[:n])
+		}
+		if err != nil {
+			break
+		}
+	}
+	werr := cmd.Wait()
+	h.stateMu.Lock()
+	h.relay, h.relayCmd = nil, nil
+	h.stateMu.Unlock()
+	_ = inner.Close()
+
+	rc := 0
+	if werr != nil {
+		rc = 1
+		var ee *exec.ExitError
+		if errors.As(werr, &ee) {
+			if ws, ok := ee.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+				rc = 128 + int(ws.Signal())
+			} else if ee.ExitCode() >= 0 {
+				rc = ee.ExitCode()
+			}
+		}
+	}
+	return rc
+}
+
+// hidden reports whether p is under one of HiddenPaths. A cwd there is
+// the empty tmpfs from the visitor's side but the real directory from the
+// host's, so sudo is run from $HOME instead.
+func (h *Host) hidden(p string) bool {
+	for _, d := range h.opt.HiddenPaths {
+		if d == "" {
+			continue
+		}
+		if p == d || strings.HasPrefix(p, strings.TrimSuffix(d, "/")+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// answerPassword serves one askpass request: the token must be the one
+// issued for the sudo currently running, and it is consumed at once. The
+// password goes into ipc/pw, which only the askpass helper (outside the
+// sandbox) can open.
+func (h *Host) answerPassword(token string) {
 	h.stateMu.Lock()
 	ok := h.tokens[token]
 	delete(h.tokens, token)
+	pw := h.heldPassword
+	h.heldPassword = ""
 	h.stateMu.Unlock()
-	pw := ""
-	if ok && h.opt.SudoPassword != nil {
+	if ok && pw == "" && h.opt.SudoPassword != nil {
 		if p, got := h.opt.SudoPassword(); got {
 			pw = p
 		}
 	}
-	h.replyFIFO(filepath.Join(h.shim, "pw."+id), pw)
+	if !ok {
+		pw = ""
+	}
+	h.replyFIFO(filepath.Join(h.shim, dirIPC, filePw), pw)
 }
 
-func (h *Host) sudoCmd(id string) string {
-	h.stateMu.Lock()
-	defer h.stateMu.Unlock()
-	return h.sudoCmds[id]
-}
-
-func (h *Host) forgetSudo(id string) {
-	h.stateMu.Lock()
-	delete(h.sudoCmds, id)
-	h.stateMu.Unlock()
-}
-
-// replyFIFO writes one line to a FIFO the shim is reading. The open is
-// non-blocking and retried briefly so a shim that died cannot wedge the host.
+// replyFIFO writes one line to a FIFO the askpass helper is reading. The
+// open is non-blocking and retried briefly so a helper that died cannot
+// wedge the host. The path is in ipc, which only the host writes, and is
+// checked to be a FIFO before anything is written.
 func (h *Host) replyFIFO(path, line string) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		f, err := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK, 0)
+		f, err := os.OpenFile(path, os.O_WRONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 		if err == nil {
-			_, _ = f.WriteString(line + "\n")
+			if st, serr := f.Stat(); serr == nil && st.Mode()&os.ModeNamedPipe != 0 {
+				_, _ = f.WriteString(line + "\n")
+			}
 			_ = f.Close()
 			return
 		}
@@ -458,8 +765,7 @@ func (h *Host) Input(p []byte) error {
 	h.stateMu.Lock()
 	h.typist = "host"
 	h.stateMu.Unlock()
-	_, err := h.ptmx.Write(p)
-	return err
+	return h.writeInput(p)
 }
 
 // SetShared announces the shared-terminal state to the visitor.
@@ -481,11 +787,24 @@ func (h *Host) Shared() bool {
 	return h.shared
 }
 
-// Marker is the sudo password prompt marker for this session.
-func (h *Host) Marker() string { return h.marker }
+// Isolated reports whether the visitor shell runs inside the namespace
+// sandbox. False only with IsolateOff or a best-effort start that could
+// not set it up.
+func (h *Host) Isolated() bool { return h.isolated }
 
-// Resize sets the PTY window size.
+// Marker is the fixed prefix of the sudo password prompt markers. Each
+// allowed sudo gets its own full marker; see redact.go.
+func (h *Host) Marker() string { return markerPrefix }
+
+// Resize sets the PTY window size (and the relayed sudo PTY, if any).
 func (h *Host) Resize(cols, rows uint16) error {
+	h.stateMu.Lock()
+	h.cols, h.rows = cols, rows
+	relay := h.relay
+	h.stateMu.Unlock()
+	if relay != nil {
+		_ = pty.Setsize(relay, &pty.Winsize{Cols: cols, Rows: rows})
+	}
 	return pty.Setsize(h.ptmx, &pty.Winsize{Cols: cols, Rows: rows})
 }
 
@@ -502,21 +821,37 @@ func (h *Host) Err() error {
 	return h.err
 }
 
-// Stop is the kill switch: kills the shell's process group, closes the PTY
-// and the channel.
+// killTree signals the shell's process group and, when isolated, the
+// sandbox process itself. SIGKILL on the sandbox init (bwrap or unshare
+// with --die-with-parent / --kill-child) tears down the PID namespace,
+// so nothing started with setsid/nohup inside survives.
+func (h *Host) killTree(sig syscall.Signal) {
+	if h.cmd == nil || h.cmd.Process == nil {
+		return
+	}
+	pid := h.cmd.Process.Pid
+	_ = syscall.Kill(-pid, sig)
+	_ = syscall.Kill(pid, sig)
+	h.stateMu.Lock()
+	rc := h.relayCmd
+	h.stateMu.Unlock()
+	if rc != nil && rc.Process != nil {
+		_ = syscall.Kill(-rc.Process.Pid, sig)
+	}
+}
+
+// Stop is the kill switch: SIGHUP to the shell tree, SIGKILL to the
+// sandbox after a short grace, then the PTY and the channel are closed.
 func (h *Host) Stop() error {
 	h.stopOnce.Do(func() {
-		if h.cmd.Process != nil {
-			pgid := h.cmd.Process.Pid
-			_ = syscall.Kill(-pgid, syscall.SIGHUP)
-			go func() {
-				select {
-				case <-h.done:
-				case <-time.After(500 * time.Millisecond):
-					_ = syscall.Kill(-pgid, syscall.SIGKILL)
-				}
-			}()
-		}
+		h.killTree(syscall.SIGHUP)
+		go func() {
+			select {
+			case <-h.done:
+			case <-time.After(500 * time.Millisecond):
+				h.killTree(syscall.SIGKILL)
+			}
+		}()
 		_ = h.ptmx.Close()
 	})
 	select {
@@ -533,9 +868,7 @@ func (h *Host) finish(err error) {
 		h.err = err
 		_ = h.send(FrameBye, nil)
 		_ = h.ch.Close()
-		if h.cmd.Process != nil {
-			_ = syscall.Kill(-h.cmd.Process.Pid, syscall.SIGHUP)
-		}
+		h.killTree(syscall.SIGHUP)
 		_ = h.ptmx.Close()
 		go func() {
 			// Reap; if SIGHUP was ignored, escalate.
@@ -544,10 +877,11 @@ func (h *Host) finish(err error) {
 			select {
 			case <-waited:
 			case <-time.After(500 * time.Millisecond):
-				_ = syscall.Kill(-h.cmd.Process.Pid, syscall.SIGKILL)
+				h.killTree(syscall.SIGKILL)
 				<-waited
 			}
 			_ = h.events.Close()
+			_ = h.replies.Close()
 			h.cleanupDir()
 		}()
 		_ = h.redact.Flush()

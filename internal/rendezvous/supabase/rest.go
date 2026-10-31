@@ -55,12 +55,22 @@ func (c *Client) Register(ctx context.Context, username, pubkey, inviteCode stri
 	return r.model(), nil
 }
 
+// publicUserCols are the only user columns the table grant exposes; the
+// caller's own full row comes from me_detail().
+const publicUserCols = "id,username,pubkey,role,last_seen,created_at"
+
 func (c *Client) Me(ctx context.Context) (model.User, error) {
-	id, err := c.uid()
-	if err != nil {
+	if _, err := c.uid(); err != nil {
 		return model.User{}, err
 	}
-	return c.UserByID(ctx, id)
+	var r *userRow
+	if err := c.do(ctx, http.MethodPost, "/rest/v1/rpc/me_detail", nil, map[string]any{}, &r); err != nil {
+		return model.User{}, err
+	}
+	if r == nil {
+		return model.User{}, rendezvous.ErrNotFound
+	}
+	return r.model(), nil
 }
 
 func (c *Client) Settings(ctx context.Context) (model.Settings, error) {
@@ -90,7 +100,7 @@ func (c *Client) UserByName(ctx context.Context, username string) (model.User, e
 	}
 	var r userRow
 	err := c.one(ctx, http.MethodGet, "/rest/v1/users",
-		q("select", "*", "username", "eq."+strings.ToLower(username), "limit", "1"), nil, &r)
+		q("select", publicUserCols, "username", "eq."+strings.ToLower(username), "limit", "1"), nil, &r)
 	return r.model(), err
 }
 
@@ -99,7 +109,7 @@ func (c *Client) UserByID(ctx context.Context, id string) (model.User, error) {
 		return model.User{}, err
 	}
 	var r userRow
-	err := c.one(ctx, http.MethodGet, "/rest/v1/users", q("select", "*", "id", "eq."+id, "limit", "1"), nil, &r)
+	err := c.one(ctx, http.MethodGet, "/rest/v1/users", q("select", publicUserCols, "id", "eq."+id, "limit", "1"), nil, &r)
 	return r.model(), err
 }
 
@@ -112,7 +122,7 @@ func (c *Client) UsersByIDs(ctx context.Context, ids []string) ([]model.User, er
 	}
 	var rows []userRow
 	err := c.do(ctx, http.MethodGet, "/rest/v1/users",
-		q("select", "*", "id", "in.("+strings.Join(ids, ",")+")"), nil, &rows)
+		q("select", publicUserCols, "id", "in.("+strings.Join(ids, ",")+")"), nil, &rows)
 	if err != nil {
 		return nil, err
 	}
@@ -130,7 +140,7 @@ func (c *Client) ListUsers(ctx context.Context) ([]model.User, error) {
 		return nil, err
 	}
 	var rows []userRow
-	err := c.do(ctx, http.MethodGet, "/rest/v1/users", q("select", "*", "order", "username.asc"), nil, &rows)
+	err := c.do(ctx, http.MethodPost, "/rest/v1/rpc/admin_list_users", nil, map[string]any{}, &rows)
 	if err != nil {
 		return nil, err
 	}
@@ -661,9 +671,9 @@ func (c *Client) SendSignal(ctx context.Context, s rendezvous.Signal) error {
 	if from == "" {
 		from = me
 	}
-	return c.do(ctx, http.MethodPost, "/rest/v1/signals", nil, map[string]any{
-		"session_id": s.SessionID, "from_user": from, "to_user": s.To, "type": s.Type,
-		"payload": encodeBytea(s.Payload),
+	_ = from
+	return c.do(ctx, http.MethodPost, "/rest/v1/rpc/send_signal", nil, map[string]any{
+		"sid": s.SessionID, "target": s.To, "t": s.Type, "p": encodeBytea(s.Payload),
 	}, nil)
 }
 

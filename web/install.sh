@@ -22,6 +22,7 @@ mkdir -p "$BIN_DIR"
 install -m 0755 "$tmp/pairdesk" "$BIN_DIR/pairdesk"
 echo "• installed to $BIN_DIR/pairdesk"
 case ":$PATH:" in *":$BIN_DIR:"*) ;; *) echo "• add to PATH:  export PATH=\"$BIN_DIR:\$PATH\"" ;; esac
+command -v bwrap >/dev/null 2>&1 || echo "• recommended for hosting sessions: install bubblewrap (apt/dnf/pacman: bubblewrap); PairDesk falls back to unshare"
 if [ ! -w /dev/uinput ] 2>/dev/null; then
   echo "• optional, for screen control sessions: sudo usermod -aG input \$USER  (then log out and in)"
 fi

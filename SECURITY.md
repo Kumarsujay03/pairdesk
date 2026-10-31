@@ -21,8 +21,10 @@ Anything that lets someone:
 
 ## What is out of scope
 
-- A visitor who already knows the host's sudo password running `/usr/bin/sudo` directly in a
-  *board* session. The shim is policy and logging, not a sandbox; see PAIRDESK.md §16.
+- A visitor who already knows the host's sudo password (the *ask* tier) or a `NOPASSWD` sudoers
+  rule running `/usr/bin/sudo` directly in a *board* session. The sandbox hides PairDesk's own
+  files and credentials and blocks credential caching; it does not jail the visitor from the
+  rest of `$HOME`. See PAIRDESK.md §16.
 - Denial of service against a free-tier Supabase project.
 - Issues in GStreamer, PipeWire, pion or other dependencies (report upstream; tell us too).
 

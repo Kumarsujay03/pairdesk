@@ -23,6 +23,8 @@ declare
   u users;
 begin
   if auth.uid() is null then raise exception 'unauthorized' using errcode = '42501'; end if;
+  perform pg_advisory_xact_lock(7340101);
+  first := not exists (select 1 from users);
   if exists (select 1 from users where id = auth.uid()) then
     raise exception 'already registered' using errcode = '23505';
   end if;
@@ -124,6 +126,40 @@ begin
   end loop;
   update groups set key_epoch = new_epoch where id = g;
 end $$;
+
+-- Signaling (rate limited) ----------------------------------------------------
+create or replace function send_signal(sid text, target uuid, t text, p bytea) returns bigint
+language plpgsql security definer set search_path = public as $$
+declare rid bigint;
+begin
+  if not is_active() or not maintenance_ok() then raise exception 'forbidden' using errcode = '42501'; end if;
+  if not bump_rate('signal', 120) then raise exception 'rate limited' using errcode = 'P0004'; end if;
+  if not (
+      are_friends(auth.uid(), target)
+      or (is_admin() and not exists (select 1 from users where id = target and banned))
+      or exists (select 1 from signals s where s.session_id = sid and s.from_user = target and s.to_user = auth.uid())
+  ) then raise exception 'forbidden' using errcode = '42501'; end if;
+  insert into signals(session_id, from_user, to_user, type, payload) values (sid, auth.uid(), target, t, p)
+  returning id into rid;
+  return rid;
+end $$;
+
+-- Own full row (moderation columns are hidden from the table grant).
+create or replace function me_detail() returns jsonb
+language sql stable security definer set search_path = public as $$
+  select to_jsonb(u) from users u where u.id = auth.uid()
+$$;
+
+-- Admin-only full user row (moderation columns are hidden from the table grant).
+create or replace function admin_user_detail(target uuid) returns jsonb
+language sql stable security definer set search_path = public as $$
+  select case when is_admin() then to_jsonb(u) else null end from users u where u.id = target
+$$;
+
+create or replace function admin_list_users() returns setof users
+language sql stable security definer set search_path = public as $$
+  select * from users where is_admin()
+$$;
 
 -- Admin ----------------------------------------------------------------------
 create or replace function admin_set_setting(k text, v jsonb) returns void
@@ -248,7 +284,7 @@ create policy realtime_presence_read on realtime.messages for select
     realtime.topic() like 'user:%' and (
       realtime.topic() = 'user:' || auth.uid()::text
       or are_friends(auth.uid(), substring(realtime.topic() from 6)::uuid)
-      or is_admin()
+      or exists (select 1 from users where id = auth.uid() and role = 'admin' and not banned)
     )
   );
 create policy realtime_presence_write on realtime.messages for insert
@@ -256,7 +292,21 @@ create policy realtime_presence_write on realtime.messages for insert
     realtime.topic() = 'user:' || auth.uid()::text
   );
 
-grant execute on all functions in schema public to authenticated;
-revoke execute on function bump_rate(text, int) from authenticated;
-revoke execute on function admin_log_write(text, text, text) from authenticated;
-revoke execute on function housekeeping() from authenticated;
+-- Functions are PUBLIC-executable by default in Postgres; take that away and
+-- grant only the client-facing RPCs to authenticated users.
+revoke execute on all functions in schema public from public, anon, authenticated;
+grant execute on function
+  setting(text), is_admin(), is_helper_or_admin(), is_active(), maintenance_ok(),
+  check_username(text), register_username(text, text, text), touch_last_seen(),
+  send_message(text, text, bytea, bytea, int), send_friend_request(uuid),
+  rotate_group_key(uuid, int, jsonb), send_signal(text, uuid, text, bytea),
+  can_read_conv(text, text),
+  admin_set_setting(text, jsonb), admin_set_user(uuid, text, boolean), admin_set_role(uuid, text),
+  admin_rename(uuid, text), admin_reset_key(uuid), admin_kick(uuid),
+  admin_create_invite(int, timestamptz), admin_approve_device(text), admin_bootstrap_device(text, text),
+  admin_stats(), admin_user_detail(uuid), admin_list_users(), me_detail(),
+  are_friends(uuid, uuid), is_member(uuid, uuid), is_owner(uuid, uuid)
+to authenticated;
+-- are_friends / is_member / is_owner / dm_* / bump_rate / admin_log_write / housekeeping stay
+-- internal: callable only from the definer functions and policies above.
+alter default privileges in schema public revoke execute on functions from public;

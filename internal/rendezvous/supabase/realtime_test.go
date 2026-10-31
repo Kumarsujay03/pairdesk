@@ -25,6 +25,7 @@ type wsFake struct {
 	joins []phxMessage
 	sent  []phxMessage
 	open  chan *websocket.Conn
+	pendingJoins []phxMessage
 	joinC chan phxMessage
 }
 
@@ -83,6 +84,14 @@ func (f *wsFake) write(conn *websocket.Conn, m phxMessage) error {
 
 func (f *wsFake) waitJoin(topic string) phxMessage {
 	f.t.Helper()
+	// Joins for other topics are kept, not dropped: rejoin order after a
+	// reconnect is not deterministic.
+	for i, m := range f.pendingJoins {
+		if m.Topic == topic {
+			f.pendingJoins = append(f.pendingJoins[:i], f.pendingJoins[i+1:]...)
+			return m
+		}
+	}
 	deadline := time.After(5 * time.Second)
 	for {
 		select {
@@ -90,6 +99,7 @@ func (f *wsFake) waitJoin(topic string) phxMessage {
 			if m.Topic == topic {
 				return m
 			}
+			f.pendingJoins = append(f.pendingJoins, m)
 		case <-deadline:
 			f.t.Fatalf("no join on %s", topic)
 		}
@@ -142,6 +152,14 @@ func setupRealtime(t *testing.T) (*fake, *wsFake, *Client) {
 	mux.HandleFunc("/rest/v1/signals", func(w http.ResponseWriter, r *http.Request) {
 		f.record(r)
 		w.WriteHeader(204)
+	})
+	mux.HandleFunc("/rest/v1/rpc/send_signal", func(w http.ResponseWriter, r *http.Request) {
+		f.record(r)
+		writeJSON(w, 200, 1)
+	})
+	mux.HandleFunc("/rest/v1/rpc/me_detail", func(w http.ResponseWriter, r *http.Request) {
+		f.record(r)
+		writeJSON(w, 200, userRowJSON)
 	})
 	mux.HandleFunc("/rest/v1/rpc/touch_last_seen", func(w http.ResponseWriter, r *http.Request) {
 		f.record(r)

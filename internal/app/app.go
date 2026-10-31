@@ -89,6 +89,8 @@ type App struct {
 	notifier  *notify.Notifier
 	focused   func(convID string) bool
 	onRevoke  func(userID string)
+	suspect   map[string]bool // users whose key changed and is not yet accepted
+	adminBad  bool            // admin key or id differs from the local pin
 }
 
 // New builds an App. Call Start next.
@@ -110,6 +112,7 @@ func New(o Options) *App {
 		groupKeys: map[string][crypto.KeySize]byte{},
 		pairwise:  map[string][crypto.KeySize]byte{},
 		typing:    map[string]time.Time{},
+		suspect:   map[string]bool{},
 	}
 }
 
@@ -331,6 +334,7 @@ func (a *App) becomeReady(ctx context.Context, me model.User) error {
 		a.mu.Lock()
 		a.settings = s
 		a.mu.Unlock()
+		a.checkAdminPin(s)
 		if s.Maintenance && me.Role != model.RoleAdmin {
 			a.setPhase(PhaseMaintenance)
 			return nil
@@ -520,28 +524,97 @@ func (a *App) cacheUsers(ctx context.Context, ids []string) error {
 	if err != nil {
 		return err
 	}
-	a.mu.Lock()
 	for _, u := range us {
-		a.users[u.ID] = u
-		a.byName[u.Username] = u.ID
-	}
-	a.mu.Unlock()
-	for _, u := range us {
-		a.pinTOFU(u)
+		a.storeUser(u)
 	}
 	return nil
 }
 
-// pinTOFU records a user's key on first sight and warns on change.
-func (a *App) pinTOFU(u model.User) {
-	if u.PubKey == "" || u.ID == a.me.ID {
-		return
+// storeUser caches a user row only if its key matches what this device has
+// pinned. A changed key is held back until the user accepts it, so no DM
+// or session ever uses an unverified key.
+func (a *App) storeUser(u model.User) bool {
+	if !a.pinTOFU(u) {
+		return false
+	}
+	a.mu.Lock()
+	a.users[u.ID] = u
+	a.byName[u.Username] = u.ID
+	a.mu.Unlock()
+	return true
+}
+
+// pinTOFU records a user's key on first sight; on change it marks the user
+// suspect, suspends grants and returns false.
+func (a *App) pinTOFU(u model.User) bool {
+	if u.ID == a.me.ID {
+		return true
+	}
+	if u.PubKey == "" {
+		return true // nothing to pin yet (fresh account or reset)
 	}
 	err := a.st.Pin(store.Pin{UserID: u.ID, Username: u.Username, PubKey: u.PubKey})
 	if errors.Is(err, store.ErrKeyChanged) {
-		a.emit(Event{Kind: EvKeyChanged, UserID: u.ID, Text: u.Username})
-		a.suspendGrantsFor(u.ID)
+		a.mu.Lock()
+		already := a.suspect[u.ID]
+		a.suspect[u.ID] = true
+		delete(a.pairwise, u.ID)
+		a.mu.Unlock()
+		if !already {
+			a.emit(Event{Kind: EvKeyChanged, UserID: u.ID, Text: u.Username})
+			a.suspendGrantsFor(u.ID)
+		}
+		return false
 	}
+	return true
+}
+
+// Suspect reports whether a user's key changed and is not yet accepted.
+func (a *App) Suspect(id string) bool { a.mu.RLock(); defer a.mu.RUnlock(); return a.suspect[id] }
+
+// checkAdminPin pins the admin's key on first sight and flags any change.
+func (a *App) checkAdminPin(s model.Settings) {
+	if s.AdminPubKey == "" {
+		return
+	}
+	pin, ok := a.st.AdminPin()
+	if !ok {
+		_ = a.st.SetAdminPin(store.AdminPin{PubKey: s.AdminPubKey})
+		return
+	}
+	bad := pin.PubKey != s.AdminPubKey
+	a.mu.Lock()
+	was := a.adminBad
+	a.adminBad = bad
+	a.mu.Unlock()
+	if bad && !was {
+		a.emit(Event{Kind: EvKeyChanged, UserID: "admin", Text: "admin"})
+	}
+}
+
+// IsTrustedAdmin reports whether u is the admin this device has pinned.
+// A server that rewrites roles or the admin key cannot pass this check.
+func (a *App) IsTrustedAdmin(u model.User) bool {
+	if u.Role != model.RoleAdmin || u.PubKey == "" {
+		return false
+	}
+	pin, ok := a.st.AdminPin()
+	a.mu.RLock()
+	bad := a.adminBad || a.suspect[u.ID]
+	a.mu.RUnlock()
+	return ok && !bad && pin.PubKey == u.PubKey && a.Settings().AdminPubKey == u.PubKey
+}
+
+// AcceptAdminKeyChange re-pins the admin key after the user agreed.
+func (a *App) AcceptAdminKeyChange() error {
+	s := a.Settings()
+	if err := a.st.SetAdminPin(store.AdminPin{PubKey: s.AdminPubKey}); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	a.adminBad = false
+	a.mu.Unlock()
+	return nil
 }
 
 // User looks a user up by id, from cache or the backend.
@@ -556,11 +629,9 @@ func (a *App) User(ctx context.Context, id string) (model.User, error) {
 	if err != nil {
 		return u, err
 	}
-	a.mu.Lock()
-	a.users[u.ID] = u
-	a.byName[u.Username] = u.ID
-	a.mu.Unlock()
-	a.pinTOFU(u)
+	if !a.storeUser(u) {
+		return u, fmt.Errorf("%s's device key changed; accept it with the card first", u.Username)
+	}
 	return u, nil
 }
 
@@ -578,11 +649,9 @@ func (a *App) UserByName(ctx context.Context, name string) (model.User, error) {
 	if err != nil {
 		return u, err
 	}
-	a.mu.Lock()
-	a.users[u.ID] = u
-	a.byName[u.Username] = u.ID
-	a.mu.Unlock()
-	a.pinTOFU(u)
+	if !a.storeUser(u) {
+		return u, fmt.Errorf("%s's device key changed; accept it with the card first", u.Username)
+	}
 	return u, nil
 }
 

@@ -3,6 +3,7 @@ package term
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"os"
@@ -137,6 +138,9 @@ func startHost(t *testing.T, opt HostOptions) (*Host, *visitorSim) {
 	if opt.Dir == "" {
 		opt.Dir = t.TempDir()
 	}
+	if opt.realSudo == "" {
+		opt.realSudo = writeFakeSudo(t)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	h, err := StartHost(ctx, hostEnd, opt)
@@ -247,29 +251,47 @@ func TestStopKillsShell(t *testing.T) {
 	}
 }
 
-// fakeSudo stands in for real sudo: it must never be reached when denied,
-// and when allowed via askpass it reports the password length only.
+// writeFakeSudo stands in for real sudo. It must never be reached when
+// denied. It understands the flags the host passes (-K, -k, -A, -p) and
+// records every password it obtained through askpass in <dir>/received,
+// which is outside the sandbox (fake sudo is run by the host process).
 func writeFakeSudo(t *testing.T) string {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "fakesudo")
 	script := `#!/bin/sh
-if [ "$1" = "-A" ]; then
-  shift
-  pw=$("$SUDO_ASKPASS" "prompt")
+rec="` + dir + `/received"
+askpass=0; prompt=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -K) exit 0 ;;
+    -k) shift ;;
+    -A) askpass=1; shift ;;
+    -p) prompt=$2; shift 2 ;;
+    *) break ;;
+  esac
+done
+if [ "$askpass" = 1 ]; then
+  pw=$("$SUDO_ASKPASS" "[sudo: $prompt] Password: ")
+  printf '%s\n' "$pw" >> "$rec"
   echo "FAKE-SUDO askpass len=${#pw}"
   exec "$@"
 fi
-if [ "$1" = "-p" ]; then
-  shift; shift
-  echo "FAKE-SUDO prompt mode"
-  exec "$@"
-fi
-echo "FAKE-SUDO ran: $*"
+printf '%s' "$prompt"
+IFS= read -r typed
+echo "FAKE-SUDO prompt mode typed=${#typed}"
+exec "$@"
 `
 	if err := os.WriteFile(p, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	return p
+}
+
+// fakeSudoReceived returns the passwords the fake sudo at path obtained.
+func fakeSudoReceived(t *testing.T, path string) string {
+	t.Helper()
+	b, _ := os.ReadFile(filepath.Join(filepath.Dir(path), "received"))
+	return string(b)
 }
 
 func TestSudoBlockedDenied(t *testing.T) {
@@ -310,21 +332,74 @@ func TestSudoBlockedDenied(t *testing.T) {
 
 func TestSudoBlockedAllowedWithAskpass(t *testing.T) {
 	shell, _ := pickShell(t)
+	fake := writeFakeSudo(t)
+	pwCalls := 0
 	h, v := startHost(t, HostOptions{
-		Shell:        shell,
-		SudoTier:     model.SudoBlocked,
-		OnSudo:       func(string) bool { return true },
-		SudoPassword: func() (string, bool) { return "hunter2", true },
-		realSudo:     writeFakeSudo(t),
+		Shell:    shell,
+		SudoTier: model.SudoBlocked,
+		OnSudo:   func(string) bool { return true },
+		SudoPassword: func() (string, bool) {
+			pwCalls++
+			return "hunter2", true
+		},
+		realSudo: fake,
 	})
 	tr := drainTranscript(h)
 	v.typeLine(t, "sudo echo done; echo rc=$?\n")
 	out := v.waitOutput(t, "rc=0")
-	if !strings.Contains(out, "FAKE-SUDO askpass len=7") {
+	if !strings.Contains(out, "FAKE-SUDO askpass len=7") || !strings.Contains(out, "\ndone") && !strings.Contains(out, "\r\ndone") {
 		t.Fatalf("askpass flow not used: %q", out)
 	}
-	if strings.Contains(out, "hunter2") || strings.Contains(tr.String(), "hunter2") {
+	if got := fakeSudoReceived(t, fake); got != "hunter2\n" {
+		t.Fatalf("fake sudo received %q", got)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if strings.Contains(v.output(), "hunter2") || strings.Contains(tr.String(), "hunter2") {
 		t.Fatal("password leaked to visitor or transcript")
+	}
+	// Nothing under ShimDir ever holds the password.
+	_ = filepath.Walk(h.shim, func(p string, info os.FileInfo, err error) error {
+		if err != nil || !info.Mode().IsRegular() {
+			return nil
+		}
+		if b, _ := os.ReadFile(p); strings.Contains(string(b), "hunter2") {
+			t.Errorf("%s contains the password", p)
+		}
+		return nil
+	})
+	if pwCalls != 1 {
+		t.Fatalf("SudoPassword called %d times, want 1", pwCalls)
+	}
+	// A second sudo needs a fresh verdict and password: no caching.
+	v.typeLine(t, "sudo echo again; echo rc=$?\n")
+	v.waitOutput(t, "again")
+	if got := fakeSudoReceived(t, fake); got != "hunter2\nhunter2\n" {
+		t.Fatalf("second sudo: fake sudo received %q", got)
+	}
+}
+
+// TestSudoBlockedApprovedWithoutPassword: the host said yes but has no
+// password to give, so real sudo prompts the visitor (marker prompt)
+// instead of askpass with an empty password.
+func TestSudoBlockedApprovedWithoutPassword(t *testing.T) {
+	shell, _ := pickShell(t)
+	h, v := startHost(t, HostOptions{
+		Shell:        shell,
+		SudoTier:     model.SudoBlocked,
+		OnSudo:       func(string) bool { return true },
+		SudoPassword: func() (string, bool) { return "", false },
+	})
+	tr := drainTranscript(h)
+	v.typeLine(t, "sudo echo done; echo rc=$?\n")
+	v.waitOutput(t, h.Marker())
+	v.typeLine(t, "hunter2\n")
+	out := v.waitOutput(t, "rc=0")
+	if !strings.Contains(out, "FAKE-SUDO prompt mode typed=7") {
+		t.Fatalf("prompt flow not used: %q", out)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := tr.String(); strings.Contains(got, "hunter2") {
+		t.Fatalf("transcript holds the typed password: %q", got)
 	}
 }
 
@@ -338,13 +413,13 @@ func TestSudoAutoWithoutPasswordDenies(t *testing.T) {
 	}
 }
 
-func TestShimRefusesWithoutSocket(t *testing.T) {
+func TestShimRefusesWithoutLink(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "sudo"), []byte(shimScript), 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "sudo"), []byte(shimScript(dir)), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(filepath.Join(dir, "sudo"), "true")
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), envHook + "=" + filepath.Join(dir, "missing"), envShimDir + "=" + dir}
+	cmd.Env = []string{"PATH=" + os.Getenv("PATH")}
 	out, err := cmd.CombinedOutput()
 	if err == nil {
 		t.Fatal("shim ran without the host link")
@@ -355,9 +430,10 @@ func TestShimRefusesWithoutSocket(t *testing.T) {
 }
 
 func TestRedactor(t *testing.T) {
-	marker := "\x1b]pairdesk-sudo-abc\x07[sudo] password: "
+	marker := markerPrefix + "0123456789ab" + markerSuffix
 	var out bytes.Buffer
-	r := newRedactor(&out, marker)
+	r := newRedactor(&out)
+	r.issue(marker)
 	write := func(s string) {
 		if _, err := r.Write([]byte(s)); err != nil {
 			t.Fatal(err)
@@ -380,33 +456,41 @@ func TestRedactor(t *testing.T) {
 	}
 	// A partial-prefix tail that turns out not to be the marker is kept.
 	out.Reset()
-	r = newRedactor(&out, marker)
+	r = newRedactor(&out)
 	write("x\x1b]")
 	write("0;title\x07y")
 	_ = r.Flush()
 	if out.String() != "x\x1b]0;title\x07y" {
 		t.Fatalf("false positive mangled output: %q", out.String())
 	}
+	// A marker the host did not issue (or retired) hides nothing.
+	out.Reset()
+	r = newRedactor(&out)
+	forged := markerPrefix + "deadbeefcafe" + markerSuffix
+	write(forged + "notsecret\r\n")
+	r.issue(marker)
+	r.retire(marker)
+	write(marker + "alsovisible\r\n")
+	_ = r.Flush()
+	if got := out.String(); !strings.Contains(got, "notsecret") || !strings.Contains(got, "alsovisible") {
+		t.Fatalf("unissued marker redacted output: %q", got)
+	}
 }
 
-func TestTranscriptRedactsAfterMarker(t *testing.T) {
+// TestForgedMarkerDoesNotRedact: the visitor prints a marker-shaped
+// sequence of their own; since the host never issued it, nothing after
+// it is hidden from the transcript.
+func TestForgedMarkerDoesNotRedact(t *testing.T) {
 	shell, _ := pickShell(t)
 	h, v := startHost(t, HostOptions{Shell: shell})
 	tr := drainTranscript(h)
-	// Print the marker then a "password" on the same line, as sudo's prompt
-	// would be followed by echoed input on a misconfigured tty.
-	v.typeLine(t, `printf '%s' "$PAIRDESK_SUDO_MARKER"; echo hun""ter2; echo visible`+"\n")
+	forged := markerPrefix + "deadbeefcafe" + markerSuffix
+	v.typeLine(t, `printf '%s' `+shellQuote(forged)+`; echo hun""ter2; echo visible`+"\n")
 	v.waitOutput(t, "visible")
 	time.Sleep(200 * time.Millisecond)
-	if !strings.Contains(v.output(), "hunter2") {
-		t.Fatal("visitor should still see the live stream")
-	}
 	got := tr.String()
-	if strings.Contains(got, "hunter2") {
-		t.Fatalf("transcript holds the redacted line: %q", got)
-	}
-	if !strings.Contains(got, "visible") {
-		t.Fatalf("transcript lost later output: %q", got)
+	if !strings.Contains(got, "hunter2") || !strings.Contains(got, "visible") {
+		t.Fatalf("transcript dropped output after a forged marker: %q", got)
 	}
 }
 
@@ -494,5 +578,226 @@ func TestOtherShellHooks(t *testing.T) {
 				t.Fatalf("exit = %d, want 1", ev.Exit)
 			}
 		})
+	}
+}
+
+func requireIsolation(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("bwrap"); err == nil {
+		return
+	}
+	if _, err := exec.LookPath("unshare"); err == nil {
+		return
+	}
+	t.Skip("neither bwrap nor unshare available")
+}
+
+func TestIsolationHidesPaths(t *testing.T) {
+	requireIsolation(t)
+	shell, _ := pickShell(t)
+	hidden := t.TempDir()
+	secret := filepath.Join(hidden, "identity.key")
+	if err := os.WriteFile(secret, []byte("top secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h, v := startHost(t, HostOptions{Shell: shell, Isolate: IsolateBestEffort, HiddenPaths: []string{hidden}})
+	if !h.Isolated() {
+		t.Skip("sandbox could not be set up here")
+	}
+	v.typeLine(t, "cat "+secret+"; echo rc=$?\n")
+	out := v.waitOutput(t, "rc=1")
+	if strings.Contains(out, "top secret") || !strings.Contains(out, "No such file") {
+		t.Fatalf("hidden path readable: %q", out)
+	}
+	ipc := filepath.Join(h.shim, dirIPC)
+	v.typeLine(t, "test -p "+filepath.Join(ipc, fileEvents)+" && echo VISIBLE-EV || echo HIDDEN-EV; test -e "+filepath.Join(ipc, filePw)+" && echo VISIBLE-PW || echo HIDDEN-PW\n")
+	out = v.waitOutput(t, "-PW")
+	if !strings.Contains(out, "HIDDEN-EV") || !strings.Contains(out, "HIDDEN-PW") {
+		t.Fatalf("ipc FIFOs visible inside the sandbox: %q", out)
+	}
+	// The shim dir is read-only inside, the host's processes invisible.
+	v.typeLine(t, "touch "+filepath.Join(h.shim, dirBin, "x")+" 2>/dev/null && echo WRITABLE || echo READONLY; ls /proc | grep -c '^[0-9]'\n")
+	out = v.waitOutput(t, "READONLY")
+	if strings.Contains(out, "WRITABLE") {
+		t.Fatalf("shim bin writable: %q", out)
+	}
+	// Sudo still works from inside (the host runs it outside).
+	v.typeLine(t, "sudo echo viasudo; echo sudorc=$?\n")
+	out = v.waitOutput(t, "sudorc=")
+	if strings.Contains(out, "sudorc=0") {
+		t.Fatalf("blocked tier allowed sudo: %q", out)
+	}
+	if !strings.Contains(out, "needs the host's consent") {
+		t.Fatalf("no denial: %q", out)
+	}
+}
+
+func TestIsolationRequiredFailsCleanly(t *testing.T) {
+	shell, _ := pickShell(t)
+	empty := t.TempDir()
+	t.Setenv("PATH", empty) // no bwrap, no unshare
+	hostEnd, _ := newPipePair()
+	_, err := StartHost(context.Background(), hostEnd, HostOptions{Shell: shell, Env: testEnv(t), Dir: t.TempDir(), realSudo: writeFakeSudo(t)})
+	if !errors.Is(err, ErrNoIsolation) {
+		t.Fatalf("StartHost = %v, want ErrNoIsolation", err)
+	}
+	hostEnd, visitorEnd := newPipePair()
+	h, err := StartHost(context.Background(), hostEnd, HostOptions{Shell: shell, Isolate: IsolateBestEffort, Env: testEnv(t), Dir: t.TempDir(), realSudo: writeFakeSudo(t)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer h.Stop()
+	if h.Isolated() {
+		t.Fatal("Isolated() true without a sandbox tool")
+	}
+	v := newVisitorSim(visitorEnd)
+	v.typeLine(t, "echo unisolated\n")
+	v.waitOutput(t, "\nunisolated")
+}
+
+func TestEnvScrubbed(t *testing.T) {
+	shell, _ := pickShell(t)
+	env := append(testEnv(t), "SSH_AUTH_SOCK=/run/user/1/ssh", "DBUS_SESSION_BUS_ADDRESS=unix:x", "GPG_AGENT_INFO=y", "SUDO_ASKPASS=/evil", "PAIRDESK_SESSION=s1", "LC_ALL=C")
+	_, v := startHost(t, HostOptions{Shell: shell, Env: env})
+	v.typeLine(t, "echo A=$SSH_AUTH_SOCK B=$DBUS_SESSION_BUS_ADDRESS C=$GPG_AGENT_INFO D=$SUDO_ASKPASS E=$PAIRDESK_SESSION F=$LC_ALL END\n")
+	out := v.waitOutput(t, " END")
+	if !strings.Contains(out, "A= B= C= D= E=s1 F=C END") {
+		t.Fatalf("environment not scrubbed as expected: %q", out)
+	}
+}
+
+// TestRealSudoNotVisitorSelectable: the binary that gets the host's
+// password is fixed at write time; PAIRDESK_REAL_SUDO in the visitor's
+// environment changes nothing.
+func TestRealSudoNotVisitorSelectable(t *testing.T) {
+	shell, _ := pickShell(t)
+	evilDir := t.TempDir()
+	evil := filepath.Join(evilDir, "evil")
+	mark := filepath.Join(evilDir, "ran")
+	if err := os.WriteFile(evil, []byte("#!/bin/sh\ntouch "+mark+"\necho EVIL-RAN\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	fake := writeFakeSudo(t)
+	_, v := startHost(t, HostOptions{Shell: shell, SudoTier: model.SudoAsk, realSudo: fake})
+	v.typeLine(t, "PAIRDESK_REAL_SUDO="+evil+" PAIRDESK_HOOK=/dev/null PAIRDESK_SHIM_DIR=/tmp sudo true; echo rc=$?\n")
+	// Ask tier: the fake prompts and waits for a line.
+	v.waitOutput(t, "[sudo] password for host: ")
+	v.typeLine(t, "pw\n")
+	out := v.waitOutput(t, "rc=0")
+	if strings.Contains(out, "EVIL-RAN") {
+		t.Fatalf("visitor-selected binary ran: %q", out)
+	}
+	if _, err := os.Stat(mark); err == nil {
+		t.Fatal("visitor-selected binary was executed")
+	}
+	if !strings.Contains(out, "FAKE-SUDO prompt mode") {
+		t.Fatalf("real sudo recorded at write time did not run: %q", out)
+	}
+}
+
+// TestStopKillsEscapedProcess: a setsid'd background process started by
+// the visitor dies with the sandbox when the host stops the session.
+func TestStopKillsEscapedProcess(t *testing.T) {
+	requireIsolation(t)
+	shell, _ := pickShell(t)
+	h, v := startHost(t, HostOptions{Shell: shell, Isolate: IsolateBestEffort})
+	if !h.Isolated() {
+		t.Skip("sandbox could not be set up here")
+	}
+	const tag = "6123"
+	v.typeLine(t, "setsid nohup sleep "+tag+" >/dev/null 2>&1 & echo started\n")
+	v.waitOutput(t, "\nstarted")
+	alive := func() bool {
+		out, _ := exec.Command("pgrep", "-f", "^sleep "+tag).Output()
+		return len(bytes.TrimSpace(out)) > 0
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for !alive() && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !alive() {
+		t.Fatal("escaped sleep never started")
+	}
+	if err := h.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for alive() && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if alive() {
+		_ = exec.Command("pkill", "-f", "^sleep "+tag).Run()
+		t.Fatal("setsid'd process survived Stop")
+	}
+}
+
+// TestSudoReadsExactArgs: arguments with spaces reach real sudo intact.
+func TestSudoReadsExactArgs(t *testing.T) {
+	shell, _ := pickShell(t)
+	var got string
+	_, v := startHost(t, HostOptions{
+		Shell:        shell,
+		SudoTier:     model.SudoBlocked,
+		OnSudo:       func(cmd string) bool { got = cmd; return true },
+		SudoPassword: func() (string, bool) { return "pw", true },
+	})
+	v.typeLine(t, "sudo printf '[%s]' 'a b' c; echo; echo rc=$?\n")
+	out := v.waitOutput(t, "rc=0")
+	if !strings.Contains(out, "[a b][c]") {
+		t.Fatalf("args mangled: %q", out)
+	}
+	if got != "printf [%s] a b c" {
+		t.Fatalf("card text = %q", got)
+	}
+}
+
+// TestUnshareFallback forces the unshare(1) sandbox by hiding bwrap from
+// PATH and checks the same guarantees hold there.
+func TestUnshareFallback(t *testing.T) {
+	un, err := exec.LookPath("unshare")
+	if err != nil {
+		t.Skip("unshare not available")
+	}
+	shell, _ := pickShell(t)
+	bindir := t.TempDir()
+	if err := os.Symlink(un, filepath.Join(bindir, "unshare")); err != nil {
+		t.Fatal(err)
+	}
+	env := testEnv(t) // full PATH for the shell and the mount script
+	t.Setenv("PATH", bindir)
+	hidden := t.TempDir()
+	if err := os.WriteFile(filepath.Join(hidden, "k"), []byte("top secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h, v := startHost(t, HostOptions{Shell: shell, Isolate: IsolateBestEffort, HiddenPaths: []string{hidden}, Env: env})
+	if !h.Isolated() {
+		t.Skip("unshare sandbox could not be set up here")
+	}
+	if filepath.Base(h.cmd.Path) != "unshare" {
+		t.Fatalf("sandbox tool = %s, want unshare", h.cmd.Path)
+	}
+	v.typeLine(t, "cat "+filepath.Join(hidden, "k")+"; echo rc=$?; test -p "+filepath.Join(h.shim, dirIPC, fileEvents)+" && echo VISIBLE || echo HIDDEN; touch "+filepath.Join(h.shim, dirBin, "x")+" 2>/dev/null && echo WRITABLE || echo READONLY; setsid sleep 6124 & echo END\n")
+	out := v.waitOutput(t, "\nEND")
+	if strings.Contains(out, "top secret") || !strings.Contains(out, "HIDDEN") || !strings.Contains(out, "READONLY") {
+		t.Fatalf("unshare sandbox leaks: %q", out)
+	}
+	alive := func() bool {
+		out, _ := exec.Command("/usr/bin/pgrep", "-f", "^sleep 6124").Output()
+		return len(bytes.TrimSpace(out)) > 0
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for !alive() && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if err := h.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for alive() && time.Now().Before(deadline) {
+		time.Sleep(50 * time.Millisecond)
+	}
+	if alive() {
+		_ = exec.Command("/usr/bin/pkill", "-f", "^sleep 6124").Run()
+		t.Fatal("setsid'd process survived Stop under unshare")
 	}
 }

@@ -4,82 +4,102 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 )
 
-// Files the host writes into ShimDir. The directory is 0700 and private to
-// one session; everything in it is regenerated per session.
+// ShimDir layout. The directory is 0700 and private to one session;
+// everything in it is regenerated per session.
+//
+//	ShimDir/bin/   sudo shim, askpass helper, rc files; first in the
+//	               visitor's PATH and bind-mounted read-only into the sandbox
+//	ShimDir/ipc/   events and pw FIFOs; covered by an empty tmpfs inside
+//	               the sandbox, so from the visitor's side it holds only
+//	               the shim's lock directory
 const (
-	fileEvents  = "events"  // FIFO: shell hooks and the shim write lines here
-	fileSudo    = "sudo"    // the shim, first in PATH
-	fileAskpass = "askpass" // SUDO_ASKPASS helper used when the host supplies the password
+	dirBin      = "bin"
+	dirIPC      = "ipc"
+	fileEvents  = "events"  // FIFO: shell hooks, the shim and askpass write lines here
+	filePw      = "pw"      // FIFO: the host writes one password line per approved askpass
+	fileSudo    = "sudo"    // the shim
+	fileAskpass = "askpass" // SUDO_ASKPASS helper, run by real sudo outside the sandbox
 	fileBashrc  = "bashrc"
 	fileFish    = "hooks.fish"
 	dirZsh      = "zdotdir"
+	dirLock     = "lock" // under ipc: mkdir mutex between concurrent shims
+
+	// Inherited file descriptors inside the visitor shell (ExtraFiles).
+	fdEvents = 3 // write end of ipc/events
+	fdReply  = 4 // read end of the reply FIFO (verdicts and exit codes only)
+
+	askpassPromptPrefix = "pairdesk-askpass-" // real sudo passes its prompt to the askpass helper as $1
 )
 
-// Environment the host sets for the visitor's shell.
-const (
-	envHook     = "PAIRDESK_HOOK"        // path of the events FIFO
-	envShimDir  = "PAIRDESK_SHIM_DIR"    // ShimDir
-	envRealSudo = "PAIRDESK_REAL_SUDO"   // real sudo binary
-	envMarker   = "PAIRDESK_SUDO_MARKER" // password prompt marker
-	envToken    = "PAIRDESK_ASKPASS_TOKEN"
-)
-
-// The sudo shim. It always asks the host what to do and waits for the
-// verdict on a per-invocation FIFO; the host decides from its own tier so
-// nothing the visitor can set in the environment changes the policy.
+// The sudo shim. Nothing it does depends on the environment: the paths it
+// needs are embedded when the host writes it, and its only link to the
+// host is the inherited fds 3 (events, write) and 4 (replies, read).
 //
-// Verdicts: "allow" runs real sudo with the marker prompt (the visitor
-// types the password; the transcript redacts it), "askpass:<token>" runs
-// real sudo with SUDO_ASKPASS so the host supplies the password without
-// the visitor seeing it, "deny:<msg>" prints msg and exits 1.
-const shimScript = `#!/bin/sh
+// It never runs sudo itself. It reports the request (cwd and the exact
+// argv, hex-encoded) and waits for the host, which applies the tier and,
+// when allowed, runs real sudo outside the sandbox on a second PTY that
+// is relayed to the visitor. So the visitor's namespace never holds a
+// password, an askpass FIFO or a process that has either.
+//
+// Replies on fd 4 are "<id>\tdone\t<rc>" or "<id>\tdeny\t<msg>". Several
+// shims (sudo a & sudo b) serialize on a mkdir lock so only one reads the
+// shared fd at a time; lines for another id are discarded.
+func shimScript(ipcDir string) string {
+	return `#!/bin/sh
 # pairdesk sudo shim: generated per session, do not edit.
-hook="$` + envHook + `"
-dir="$` + envShimDir + `"
-if [ -z "$hook" ] || [ ! -p "$hook" ] || [ -z "$dir" ] || [ ! -d "$dir" ]; then
+# The host decides what runs; nothing in the environment changes that.
+lock=` + shellQuote(filepath.Join(ipcDir, dirLock)) + `
+tab=$(printf '\t')
+if ! { true >&3; } 2>/dev/null || ! { true <&4; } 2>/dev/null; then
   echo "pairdesk: sudo is unavailable: host link missing" >&2
   exit 1
 fi
-real="${` + envRealSudo + `:-/usr/bin/sudo}"
 id=$$
-resp="$dir/resp.$id"
-cmd=$(printf '%s ' "$@" | tr '\n\t' '  ')
-cmd=${cmd% }
-mkfifo -m 600 "$resp" 2>/dev/null || { echo "pairdesk: sudo shim: cannot create reply pipe" >&2; exit 1; }
-printf 'sudo\t%s\t%s\n' "$id" "$cmd" > "$hook"
-IFS= read -r verdict < "$resp"
-rm -f "$resp"
-case "$verdict" in
-  allow)
-    "$real" -p "$` + envMarker + `" "$@"; rc=$? ;;
-  askpass:*)
-    ` + envToken + `="${verdict#askpass:}" SUDO_ASKPASS="$dir/` + fileAskpass + `" "$real" -A "$@"; rc=$? ;;
-  deny:*)
-    echo "${verdict#deny:}" >&2; rc=1 ;;
-  *)
-    echo "pairdesk: sudo needs the host's consent" >&2; rc=1 ;;
-esac
-printf 'sudoexit\t%s\t%s\n' "$id" "$rc" > "$hook"
-exit $rc
+args=$(printf '%s\0' "$@" | od -An -v -tx1 | tr -d ' \n')
+n=0
+while ! mkdir "$lock" 2>/dev/null; do
+  p=$(cat "$lock/pid" 2>/dev/null)
+  if [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; then rm -rf "$lock"; continue; fi
+  n=$((n+1))
+  if [ "$n" -gt 600 ]; then echo "pairdesk: sudo shim: another sudo is still waiting" >&2; exit 1; fi
+  sleep 0.1
+done
+echo "$id" > "$lock/pid"
+trap 'rm -rf "$lock"' EXIT
+printf 'sudo\t%s\t%s\t%s\n' "$id" "$PWD" "$args" >&3
+rc=1
+while IFS= read -r line <&4; do
+  case "$line" in
+    "$id${tab}done${tab}"*) rc=${line##*"$tab"}; break ;;
+    "$id${tab}deny${tab}"*) echo "${line#*"${tab}deny${tab}"}" >&2; rc=1; break ;;
+  esac
+done
+exit "$rc"
 `
+}
 
-// The askpass helper: asks the host for the password over the FIFO and
-// prints it to sudo. The one-shot token issued with the verdict must match
-// or the host answers with an empty line.
-const askpassScript = `#!/bin/sh
-hook="$` + envHook + `"
-dir="$` + envShimDir + `"
-[ -n "$hook" ] && [ -p "$hook" ] && [ -n "$dir" ] || exit 1
-resp="$dir/pw.$$"
-mkfifo -m 600 "$resp" 2>/dev/null || exit 1
-printf 'pw\t%s\t%s\n' "$$" "$` + envToken + `" > "$hook"
-IFS= read -r pw < "$resp"
-rm -f "$resp"
-printf '%s\n' "$pw"
+// The askpass helper. Real sudo runs it outside the sandbox (the host
+// spawns sudo) with the one-shot token in the prompt argument. It reports
+// the token to the host over the events FIFO and reads the password from
+// the pw FIFO; both live under ShimDir/ipc, which the visitor's mount
+// namespace cannot see. A wrong or reused token gets an empty line.
+func askpassScript(ipcDir string) string {
+	return `#!/bin/sh
+# pairdesk askpass helper: generated per session, do not edit.
+ev=` + shellQuote(filepath.Join(ipcDir, fileEvents)) + `
+pw=` + shellQuote(filepath.Join(ipcDir, filePw)) + `
+t=${1##*` + askpassPromptPrefix + `}
+t=${t%%[!0-9a-f]*}
+[ -n "$t" ] && [ -p "$ev" ] && [ -p "$pw" ] || exit 1
+printf 'pw\t%s\n' "$t" > "$ev"
+IFS= read -r p < "$pw"
+printf '%s\n' "$p"
 `
+}
 
 const bashRC = `# pairdesk shell hooks: generated per session, do not edit.
 if [ -f "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi
@@ -99,13 +119,13 @@ __pd_pre() {
   line="${line#*[[:space:]]}"
   line="${line#"${line%%[![:space:]]*}"}"
   [ -n "$line" ] || line="$BASH_COMMAND"
-  printf 'pre\t%s\t%s\n' "$PWD" "$line" > "$PAIRDESK_HOOK"
+  printf 'pre\t%s\t%s\n' "$PWD" "$line" >&3 2>/dev/null
   return 0
 }
 __pd_post() {
   local e=$?
   if [ "$__pd_ready" = 0 ]; then
-    printf 'post\t%s\t%s\n' "$e" "$PWD" > "$PAIRDESK_HOOK"
+    printf 'post\t%s\t%s\n' "$e" "$PWD" >&3 2>/dev/null
   fi
   __pd_ready=1
   return 0
@@ -121,8 +141,8 @@ trap '__pd_pre' DEBUG
 const zshRC = `# pairdesk shell hooks: generated per session, do not edit.
 ZDOTDIR="$HOME"
 [ -f "$HOME/.zshrc" ] && source "$HOME/.zshrc"
-__pd_pre() { printf 'pre\t%s\t%s\n' "$PWD" "$1" > "$PAIRDESK_HOOK" }
-__pd_post() { local e=$?; printf 'post\t%s\t%s\n' "$e" "$PWD" > "$PAIRDESK_HOOK" }
+__pd_pre() { printf 'pre\t%s\t%s\n' "$PWD" "$1" >&3 2>/dev/null }
+__pd_post() { local e=$?; printf 'post\t%s\t%s\n' "$e" "$PWD" >&3 2>/dev/null }
 autoload -Uz add-zsh-hook
 add-zsh-hook preexec __pd_pre
 add-zsh-hook precmd __pd_post
@@ -133,16 +153,16 @@ const zshEnv = `[ -f "$HOME/.zshenv" ] && source "$HOME/.zshenv"
 
 const fishHooks = `# pairdesk shell hooks: generated per session, do not edit.
 function __pd_pre --on-event fish_preexec
-    printf 'pre\t%s\t%s\n' "$PWD" "$argv[1]" > "$PAIRDESK_HOOK"
+    printf 'pre\t%s\t%s\n' "$PWD" "$argv[1]" >&3 2>/dev/null
 end
 function __pd_post --on-event fish_postexec
     set -l e $status
-    printf 'post\t%s\t%s\n' "$e" "$PWD" > "$PAIRDESK_HOOK"
+    printf 'post\t%s\t%s\n' "$e" "$PWD" >&3 2>/dev/null
 end
 `
 
-// writeShimDir populates dir with the shim, askpass helper, rc files and
-// the events FIFO. dir must already exist with mode 0700.
+// writeShimDir populates dir/bin and dir/ipc. dir must exist with mode
+// 0700. Previous contents of both subdirectories are discarded.
 func writeShimDir(dir string) error {
 	st, err := os.Stat(dir)
 	if err != nil {
@@ -156,22 +176,31 @@ func writeShimDir(dir string) error {
 			return err
 		}
 	}
+	bin, ipc := filepath.Join(dir, dirBin), filepath.Join(dir, dirIPC)
+	for _, d := range []string{bin, ipc} {
+		if err := os.RemoveAll(d); err != nil {
+			return err
+		}
+		if err := os.Mkdir(d, 0o700); err != nil {
+			return err
+		}
+	}
 	files := []struct {
 		name string
 		body string
 		mode os.FileMode
 	}{
-		{fileSudo, shimScript, 0o700},
-		{fileAskpass, askpassScript, 0o700},
+		{fileSudo, shimScript(ipc), 0o700},
+		{fileAskpass, askpassScript(ipc), 0o700},
 		{fileBashrc, bashRC, 0o600},
 		{fileFish, fishHooks, 0o600},
 	}
 	for _, f := range files {
-		if err := os.WriteFile(filepath.Join(dir, f.name), []byte(f.body), f.mode); err != nil {
+		if err := os.WriteFile(filepath.Join(bin, f.name), []byte(f.body), f.mode); err != nil {
 			return err
 		}
 	}
-	zd := filepath.Join(dir, dirZsh)
+	zd := filepath.Join(bin, dirZsh)
 	if err := os.MkdirAll(zd, 0o700); err != nil {
 		return err
 	}
@@ -181,10 +210,41 @@ func writeShimDir(dir string) error {
 	if err := os.WriteFile(filepath.Join(zd, ".zshenv"), []byte(zshEnv), 0o600); err != nil {
 		return err
 	}
-	fifo := filepath.Join(dir, fileEvents)
-	_ = os.Remove(fifo)
-	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
-		return fmt.Errorf("term: mkfifo: %w", err)
+	for _, f := range []string{fileEvents, filePw} {
+		if err := syscall.Mkfifo(filepath.Join(ipc, f), 0o600); err != nil {
+			return fmt.Errorf("term: mkfifo %s: %w", f, err)
+		}
 	}
 	return nil
+}
+
+// decodeHexArgs turns the shim's hex-encoded, NUL-separated argv back
+// into a slice.
+func decodeHexArgs(h string) ([]string, bool) {
+	if len(h)%2 != 0 {
+		return nil, false
+	}
+	raw := make([]byte, 0, len(h)/2)
+	for i := 0; i < len(h); i += 2 {
+		var b byte
+		for _, c := range h[i : i+2] {
+			b <<= 4
+			switch {
+			case c >= '0' && c <= '9':
+				b |= byte(c - '0')
+			case c >= 'a' && c <= 'f':
+				b |= byte(c-'a') + 10
+			default:
+				return nil, false
+			}
+		}
+		raw = append(raw, b)
+	}
+	if len(raw) == 0 {
+		return nil, true
+	}
+	if raw[len(raw)-1] != 0 {
+		return nil, false
+	}
+	return strings.Split(string(raw[:len(raw)-1]), "\x00"), true
 }

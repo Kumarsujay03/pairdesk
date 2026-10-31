@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/Kumarsujay03/pairdesk/internal/crypto"
@@ -230,15 +231,23 @@ func (a *App) ConfirmVerify(ctx context.Context, name string) error {
 
 // AcceptKeyChange re-pins a changed key after the user agreed.
 func (a *App) AcceptKeyChange(ctx context.Context, name string) error {
-	u, err := a.be.UserByName(ctx, name)
+	if name == "admin" {
+		return a.AcceptAdminKeyChange()
+	}
+	u, err := a.be.UserByName(ctx, strings.ToLower(strings.TrimPrefix(name, "@")))
 	if err != nil {
 		return err
 	}
+	if err := a.st.ForcePin(store.Pin{UserID: u.ID, Username: u.Username, PubKey: u.PubKey}); err != nil {
+		return err
+	}
 	a.mu.Lock()
-	a.users[u.ID] = u
+	delete(a.suspect, u.ID)
 	delete(a.pairwise, u.ID)
+	a.users[u.ID] = u
+	a.byName[u.Username] = u.ID
 	a.mu.Unlock()
-	return a.st.ForcePin(store.Pin{UserID: u.ID, Username: u.Username, PubKey: u.PubKey})
+	return nil
 }
 
 // MyPhrase is my own fingerprint phrase.

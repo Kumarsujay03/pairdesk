@@ -6,19 +6,26 @@ permissions: { contents: write }
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      HAS_GPG: ${{ secrets.GPG_PRIVATE_KEY != '' }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON: ${{ secrets.SUPABASE_ANON }}
+      GPG_FINGERPRINT: ${{ secrets.GPG_FINGERPRINT }}
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
       - uses: actions/setup-go@v5
         with: { go-version-file: go.mod }
       - name: Import signing key
-        if: ${{ secrets.GPG_PRIVATE_KEY != '' }}
+        if: env.HAS_GPG == 'true'
+        run: printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
         env: { GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }} }
-        run: echo "$GPG_PRIVATE_KEY" | gpg --batch --import
-      - uses: goreleaser/goreleaser-action@v6
+      - name: Release (signed)
+        if: env.HAS_GPG == 'true'
+        uses: goreleaser/goreleaser-action@v6
         with: { version: "~> v2", args: release --clean }
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_ANON: ${{ secrets.SUPABASE_ANON }}
-          GPG_FINGERPRINT: ${{ secrets.GPG_FINGERPRINT }}
+      - name: Release (unsigned, no GPG secret configured)
+        if: env.HAS_GPG != 'true'
+        uses: goreleaser/goreleaser-action@v6
+        with: { version: "~> v2", args: release --clean --skip=sign }

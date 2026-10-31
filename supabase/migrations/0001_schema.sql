@@ -99,9 +99,10 @@ create table friendships (
 );
 create unique index friendships_pair_idx on friendships (least(requester, addressee), greatest(requester, addressee));
 
+-- Only answers about the caller (or for the admin), so it is not an oracle.
 create or replace function are_friends(a uuid, b uuid) returns boolean
 language sql stable security definer set search_path = public as $$
-  select exists (
+  select (auth.uid() in (a, b) or is_admin()) and exists (
     select 1 from friendships
     where status = 'accepted'
       and least(requester, addressee) = least(a, b)
@@ -130,11 +131,11 @@ create table group_members (
 
 create or replace function is_member(g uuid, u uuid) returns boolean
 language sql stable security definer set search_path = public as
-$$ select exists (select 1 from group_members where group_id = g and user_id = u) $$;
+$$ select (u = auth.uid() or is_admin()) and exists (select 1 from group_members where group_id = g and user_id = u) $$;
 
 create or replace function is_owner(g uuid, u uuid) returns boolean
 language sql stable security definer set search_path = public as
-$$ select exists (select 1 from groups where id = g and owner = u) $$;
+$$ select (u = auth.uid() or is_admin()) and exists (select 1 from groups where id = g and owner = u) $$;
 
 -- ---------------------------------------------------------------- messages
 create table messages (
@@ -188,7 +189,7 @@ create index grants_pair_idx on grants(grantor, grantee) where revoked_at is nul
 
 -- ------------------------------------------------------------ session logs
 create table session_logs (
-  id         uuid primary key,
+  id         text primary key check (id ~ '^[A-Za-z0-9_-]{8,32}$'),
   visitor    uuid not null references users(id) on delete cascade,
   host       uuid not null references users(id) on delete cascade,
   kind       text not null check (kind in ('watch','board','screen','share','send')),
@@ -201,7 +202,7 @@ create table session_logs (
 -- Encrypted signaling blobs for P2P setup. Rows are short-lived.
 create table signals (
   id         bigserial primary key,
-  session_id text not null,
+  session_id text not null check (session_id ~ '^[A-Za-z0-9_-]{8,32}$'),
   from_user  uuid not null references users(id) on delete cascade,
   to_user    uuid not null references users(id) on delete cascade,
   type       text not null check (type in ('offer','answer','ice','noise1','noise2','bye','card','card_reply')),

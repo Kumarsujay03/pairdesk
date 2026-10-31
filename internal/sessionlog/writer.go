@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"os"
 	"path/filepath"
@@ -86,6 +87,7 @@ type Writer struct {
 	mu        sync.Mutex
 	cast      *os.File
 	castW     *bufio.Writer
+	castHash  hash.Hash
 	castOff   int64
 	cmds      *os.File
 	files     *os.File
@@ -118,6 +120,7 @@ func NewWriter(dir string, meta Meta) (*Writer, error) {
 		return nil, err
 	}
 	w.castW = bufio.NewWriterSize(w.cast, 64<<10)
+	w.castHash = sha256.New()
 	if w.cmds, err = open("commands.jsonl"); err != nil {
 		return nil, err
 	}
@@ -144,6 +147,7 @@ func NewWriter(dir string, meta Meta) (*Writer, error) {
 
 func (w *Writer) writeCast(b []byte) error {
 	n, err := w.castW.Write(b)
+	w.castHash.Write(b[:n])
 	w.castOff += int64(n)
 	return err
 }
@@ -288,11 +292,8 @@ func (w *Writer) Seal(id *crypto.Identity, reason string) error {
 	w.meta.EndReason = reason
 	w.meta.CommandsHash = hex.EncodeToString(w.cmdPrev[:])
 	w.meta.FilesHash = hex.EncodeToString(w.filePrev[:])
-	th, err := fileSHA(filepath.Join(w.Dir, "transcript.cast"))
-	if err != nil {
-		return err
-	}
-	w.meta.TranscriptHash = th
+	// Hash of the bytes this process wrote, not of whatever is on disk now.
+	w.meta.TranscriptHash = hex.EncodeToString(w.castHash.Sum(nil))
 	if id != nil {
 		w.meta.SignerPubKey = id.Public().String()
 		w.meta.Signature = id.Sign(sigDomain, sealBody(w.meta))

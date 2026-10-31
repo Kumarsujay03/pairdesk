@@ -65,6 +65,11 @@ func DownloadDir() string {
 // Send offers a file to a friend (or, for the admin, anyone). It blocks
 // until the transfer finishes.
 func (m *Manager) Send(ctx context.Context, name, path string, progress func(transfer.Progress)) error {
+	if m.lock != nil && m.app.IsHelperOrAdmin() {
+		if err := m.lock.Require(); err != nil {
+			return err
+		}
+	}
 	peer, err := m.app.UserByName(ctx, name)
 	if err != nil {
 		return err
@@ -89,7 +94,7 @@ func (m *Manager) Send(ctx context.Context, name, path string, progress func(tra
 	m.pending[id] = reply
 	m.mu.Unlock()
 	fc, _ := json.Marshal(fileCard{Manifest: man})
-	payload, err := m.seal(ctx, peer.ID, id, card{Kind: model.SessionSend, Name: m.app.Me().Username, Manifest: fc, At: time.Now().Unix()})
+	payload, err := m.seal(ctx, peer.ID, id, "card", card{Kind: model.SessionSend, Name: m.app.Me().Username, Manifest: fc, At: time.Now().Unix()})
 	if err != nil {
 		m.finish(s, err.Error())
 		return err
@@ -289,7 +294,8 @@ func (m *Manager) ShareToGroup(ctx context.Context, c *app.Conversation, path st
 func (m *Manager) Fetch(ctx context.Context, c *app.Conversation, manifestID string, progress func(transfer.Progress)) error {
 	var man transfer.Manifest
 	seeds := map[string]bool{}
-	for _, msg := range c.Msgs {
+	msgs, _ := m.app.Snapshot(c)
+	for _, msg := range msgs {
 		switch msg.Kind {
 		case "file":
 			var mm transfer.Manifest
@@ -359,7 +365,7 @@ func (m *Manager) pullFrom(ctx context.Context, uid string, man transfer.Manifes
 	m.mu.Unlock()
 	defer m.dropSignaler(id)
 	fc, _ := json.Marshal(fileCard{Manifest: man, Pull: true})
-	payload, err := m.seal(ctx, uid, id, card{Kind: model.SessionSend, Name: m.app.Me().Username, Manifest: fc, At: time.Now().Unix()})
+	payload, err := m.seal(ctx, uid, id, "card", card{Kind: model.SessionSend, Name: m.app.Me().Username, Manifest: fc, At: time.Now().Unix()})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -406,8 +412,9 @@ func expand(p string) string {
 
 func safeName(n string) string {
 	n = filepath.Base(n)
-	if n == "." || n == "/" || n == "" {
-		return "file"
+	if n == "." || n == ".." || n == "/" || n == "" || strings.HasPrefix(n, "-") ||
+		strings.HasSuffix(n, ".part") || strings.HasSuffix(n, ".part.json") {
+		return "file-" + crypto.RandomID(4)
 	}
 	return strings.Map(func(r rune) rune {
 		if r < 32 || r == '/' {

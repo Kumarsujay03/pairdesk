@@ -132,6 +132,7 @@ func (a *App) handle(e rendezvous.Event) {
 		old := a.settings
 		a.settings = *e.Settings
 		a.mu.Unlock()
+		a.checkAdminPin(*e.Settings)
 		if e.Settings.AnnouncementID != old.AnnouncementID && e.Settings.Announcement != "" {
 			a.emit(Event{Kind: EvAnnouncement, Text: e.Settings.Announcement})
 		}
@@ -144,10 +145,7 @@ func (a *App) handle(e rendezvous.Event) {
 	case rendezvous.EvUser:
 		if e.User == nil || e.User.ID != a.me.ID {
 			if e.User != nil {
-				a.mu.Lock()
-				a.users[e.User.ID] = *e.User
-				a.mu.Unlock()
-				a.pinTOFU(*e.User)
+				a.storeUser(*e.User)
 			}
 			return
 		}

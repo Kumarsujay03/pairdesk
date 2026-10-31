@@ -90,6 +90,27 @@ func (a *App) Conversations() []*Conversation {
 	return out
 }
 
+// Snapshot returns a copy of a conversation's messages and its unread count
+// under the app lock; UIs must use this rather than reading the fields.
+func (a *App) Snapshot(c *Conversation) (msgs []Msg, unread int) {
+	if c == nil {
+		return nil, 0
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return append([]Msg(nil), c.Msgs...), c.Unread
+}
+
+// Unread returns the unread count under the lock.
+func (a *App) Unread(c *Conversation) int {
+	if c == nil {
+		return 0
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return c.Unread
+}
+
 // Conv returns one conversation by id.
 func (a *App) Conv(id string) *Conversation { a.mu.RLock(); defer a.mu.RUnlock(); return a.convs[id] }
 
@@ -258,6 +279,9 @@ func (a *App) pairwiseKey(ctx context.Context, peer string) ([crypto.KeySize]byt
 	a.mu.RUnlock()
 	if ok {
 		return k, nil
+	}
+	if a.Suspect(peer) {
+		return k, errors.New("their device key changed; accept the new key first")
 	}
 	u, err := a.User(ctx, peer)
 	if err != nil {

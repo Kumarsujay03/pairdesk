@@ -277,9 +277,25 @@ func newFake(t *testing.T) (*fake, *httptest.Server) {
 			"grantee_pubkey": "GPK", "signature": `\xdeadbeef`, "created_at": "2026-01-01T00:00:00Z",
 			"revoked_at": nil}})
 	})
-	mux.HandleFunc("/rest/v1/signals", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/rest/v1/rpc/send_signal", func(w http.ResponseWriter, r *http.Request) {
 		f.record(r)
-		w.WriteHeader(204)
+		writeJSON(w, 200, 1)
+	})
+	mux.HandleFunc("/rest/v1/rpc/me_detail", func(w http.ResponseWriter, r *http.Request) {
+		rec := f.record(r)
+		if rec.Header.Get("apikey") != anon {
+			writeJSON(w, 401, map[string]any{"message": "No API key found in request"})
+			return
+		}
+		if rec.Header.Get("Authorization") == "" {
+			writeJSON(w, 401, map[string]any{"message": "JWT required"})
+			return
+		}
+		writeJSON(w, 200, userRowJSON)
+	})
+	mux.HandleFunc("/rest/v1/rpc/admin_list_users", func(w http.ResponseWriter, r *http.Request) {
+		f.record(r)
+		writeJSON(w, 200, []any{userRowJSON, userRowJSON, userRowJSON})
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		f.record(r)
@@ -380,7 +396,7 @@ func TestAutoRefresh(t *testing.T) {
 	if after == before {
 		t.Fatal("token not rotated")
 	}
-	if r := f.last("/rest/v1/users"); r.Header.Get("Authorization") != "Bearer "+after {
+	if r := f.last("/rest/v1/rpc/me_detail"); r.Header.Get("Authorization") != "Bearer "+after {
 		t.Fatalf("users bearer %q want %q", r.Header.Get("Authorization"), after)
 	}
 	// Now the token is fresh for an hour: no further refresh.
@@ -399,7 +415,7 @@ func TestHeaders(t *testing.T) {
 	c := New(Config{URL: srv.URL, AnonKey: anon, AdminToken: "adm-1"})
 	ctx := context.Background()
 	login(t, c)
-	if _, err := c.Me(ctx); err != nil {
+	if _, err := c.UserByID(ctx, meID); err != nil {
 		t.Fatal(err)
 	}
 	r := f.last("/rest/v1/users")
@@ -412,14 +428,14 @@ func TestHeaders(t *testing.T) {
 	if r.Header.Get("x-pairdesk-admin-token") != "adm-1" {
 		t.Errorf("admin token: %q", r.Header.Get("x-pairdesk-admin-token"))
 	}
-	if r.Query != "id=eq."+meID+"&limit=1&select=%2A" {
+	if r.Query != "id=eq."+meID+"&limit=1&select=id%2Cusername%2Cpubkey%2Crole%2Clast_seen%2Ccreated_at" {
 		t.Errorf("query: %q", r.Query)
 	}
 	c.SetAdminToken("")
 	if _, err := c.Me(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if h := f.last("/rest/v1/users").Header.Get("x-pairdesk-admin-token"); h != "" {
+	if h := f.last("/rest/v1/rpc/me_detail").Header.Get("x-pairdesk-admin-token"); h != "" {
 		t.Errorf("admin token still sent: %q", h)
 	}
 	// Bootstrap installs the token it gets back.
@@ -613,7 +629,7 @@ func TestFriendsAndMessages(t *testing.T) {
 	if err := c.SendSignal(ctx, rendezvous.Signal{SessionID: "s1", To: themID, Type: "offer", Payload: []byte{1, 2}}); err != nil {
 		t.Fatal(err)
 	}
-	if r := f.last("/rest/v1/signals"); !strings.Contains(r.Body, `"from_user":"`+meID+`"`) || !strings.Contains(r.Body, `"payload":"\\x0102"`) {
+	if r := f.last("/rest/v1/rpc/send_signal"); !strings.Contains(r.Body, `"target":"`+themID+`"`) || !strings.Contains(r.Body, `"p":"\\x0102"`) || !strings.Contains(r.Body, `"sid":"s1"`) {
 		t.Fatalf("signal body: %s", r.Body)
 	}
 }

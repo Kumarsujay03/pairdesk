@@ -58,7 +58,8 @@ func (wt *Watcher) excluded(p string) bool {
 	}
 	base := filepath.Base(p)
 	switch base {
-	case ".git", ".cache", "node_modules", ".npm", ".cargo", "target", ".venv", "__pycache__", ".local/share/Trash":
+	case ".git", ".cache", "node_modules", ".npm", ".cargo", "target", ".venv", "__pycache__", "Trash",
+		".mozilla", ".thunderbird", "Cache", "CachedData", ".gradle", ".m2", ".rustup", "go", ".steam", "snap":
 		return true
 	}
 	return strings.HasPrefix(p, "/proc") || strings.HasPrefix(p, "/sys") || strings.HasPrefix(p, "/dev")
@@ -86,7 +87,9 @@ func (wt *Watcher) addTree(dir string, depth int) {
 		return
 	}
 	for _, e := range ents {
-		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
+		if e.IsDir() {
+			// Dot-directories are exactly where persistence lives (.ssh,
+			// .config/systemd, .config/autostart), so they are watched too.
 			wt.addTree(filepath.Join(dir, e.Name()), depth+1)
 		}
 	}

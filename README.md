@@ -49,6 +49,8 @@ go build -ldflags "-X main.supabaseURL=https://xxx.supabase.co -X main.supabaseA
 | Session setup | Noise IK over Ed25519 device identities, signaling encrypted end to end |
 | Session data | WebRTC DTLS, certificate fingerprints signed by device keys |
 | Grants | Signed by the grantor, enforced by the grantor's client, bound to the grantee's pinned key |
+| Visitor shell | User/mount/PID namespace sandbox (bubblewrap or unshare); PairDesk's own files hidden, environment scrubbed, sudo credential caching disabled; session refused if no sandbox |
+| Key pinning | Peer and admin keys pinned on first sight; a changed key blocks DMs and sessions until accepted |
 | Admin account | Email login **and** an approved device token, plus a local Argon2id passphrase for privileged commands |
 | Logs | Per-line hash chain, sealed and signed by both sides |
 

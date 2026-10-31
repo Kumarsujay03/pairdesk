@@ -789,18 +789,39 @@ The build follows this document with these concrete choices, each made for relia
   portal, X11 fallback). In control mode the visitor's keyboard is forwarded from the terminal with a
   pointer mode (`ctrl+]` `p`; arrows move, enter clicks). A native window with pointer capture is a
   later improvement. Input injection uses `uinput`, so the host must be in the `input` group.
-- **Sudo shim**: the visitor shell gets a `sudo` wrapper first in PATH that always asks the host
-  client over a private FIFO. Tier *blocked*: the host sees a card with the exact command and types
-  their own password locally (fed to real `sudo` through an askpass helper, never shown to the
-  visitor). Tier *ask*: real sudo prompts in the visitor's terminal, the prompt is redacted from the
-  transcript. Tier *auto*: the host's stored password is supplied by the askpass helper. What the shim
-  does not do: it cannot stop a visitor who already knows the host's password from running
-  `/usr/bin/sudo` directly, and because visitor and shell are the same Unix user the shim is a
-  policy and logging layer, not a sandbox. The log records every sudo invocation either way.
+- **Visitor shell sandbox**: the visitor's shell runs inside a user + mount + PID namespace
+  (bubblewrap when installed, `unshare` otherwise). The PairDesk config, state and cache directories
+  are replaced by empty tmpfs mounts, so the device key, saved login, grants, stored sudo secret and
+  session logs are unreachable from inside. The environment is scrubbed to a whitelist (no
+  `SSH_AUTH_SOCK`, `DBUS_SESSION_BUS_ADDRESS`, `GPG_AGENT_INFO`). Killing the sandbox kills every
+  descendant, so `setsid`/`nohup` cannot outlive `/stop`. If no sandbox can be set up the session is
+  refused rather than started unprotected. What the sandbox does not do: the visitor is still your
+  Unix user for everything else in `$HOME`, so a *board* session is "help me with my files", not a
+  jail; that is what the file log, the kill switch and the blocked sudo tier are for.
+- **Sudo shim**: inside the sandbox `sudo` is a wrapper with the real sudo path baked in at session
+  start (nothing the visitor exports changes it) that asks the host client over file descriptors the
+  visitor's processes cannot open. Tier *blocked*: the host sees a card with the exact command and
+  types their own password locally; it reaches real `sudo` through an askpass helper bound to a
+  one-shot token and is never written anywhere the visitor can read. Tier *ask*: real sudo prompts in
+  the visitor's terminal, the prompt is redacted from the transcript with a per-invocation marker the
+  host issues. Tier *auto*: the stored password is supplied the same way. Every invocation runs with
+  `-k` and the session starts with `sudo -K`, so one approval never leaves cached root for the next
+  command. What it cannot do: a visitor who knows the host's password (*ask* tier) or a `NOPASSWD`
+  sudoers rule can always run `/usr/bin/sudo` directly; the log records that too.
 - **Session logs** live in `~/.local/state/pairdesk/sessions/<id>/` as asciicast + JSONL with a
-  per-line hash chain, sealed and signed by the device key. `/logs` lists, shows commands with their
-  output, lists touched files with diffs, replays, verifies and deletes. The log and config dirs are
-  excluded from the file watcher; the shim dir is 0700.
+  per-line hash chain; the transcript hash is computed from the bytes as they are written, and the
+  seal is signed by the device key. `/logs verify` checks against *this device's* key for host
+  copies, never against a key found inside the file. Dot-directories such as `~/.ssh` and
+  `~/.config` are watched like any other; the PairDesk directories themselves are hidden from the
+  visitor and excluded from the watcher.
+- **Key pinning is enforced, not advisory.** A peer whose device key changes is held back: no DM,
+  card or session uses the new key until the user accepts it from the key-change card, and any
+  grant to that peer is suspended. The admin's key is pinned separately on first sight; a server
+  that rewrites `role` or `admin_pubkey` cannot make a client treat another account as the admin.
+- **Database hardening**: column-level grants hide moderation columns and invite codes from
+  non-admins; friend requests, signaling and admin device approval only happen through
+  rate-limited `security definer` functions; helper predicates answer only about the caller;
+  function execute privileges are revoked from `public` and `anon` and granted per function.
 - **Admin second factor** is a device token minted by the database on first admin run and sent as a
   request header; `is_admin()` checks it on every privileged query. Additional admin devices are
   approved from an existing one. The admin passphrase (Argon2id, local) gates admin and remote

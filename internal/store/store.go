@@ -153,15 +153,37 @@ func (s *Store) CreateIdentity() (*crypto.Identity, error) {
 	return id, nil
 }
 
-// DeleteIdentity removes the key (used after an admin reset-key).
+// DeleteIdentity retires the key after an admin reset-key. The file is
+// renamed, not removed, so old history stays recoverable by the owner.
 func (s *Store) DeleteIdentity() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	err := os.Remove(s.cfg("identity.key"))
+	err := os.Rename(s.cfg("identity.key"), s.cfg(fmt.Sprintf("identity.key.retired-%d", time.Now().Unix())))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	return err
+}
+
+// AdminPin is the admin identity this device trusts: user id and key,
+// recorded on first sight and never silently replaced.
+type AdminPin struct {
+	UserID   string    `json:"user_id"`
+	PubKey   string    `json:"pubkey"`
+	PinnedAt time.Time `json:"pinned_at"`
+}
+
+func (s *Store) AdminPin() (AdminPin, bool) {
+	var p AdminPin
+	if err := s.readJSON(s.cfg("admin.pin"), &p); err != nil || p.PubKey == "" {
+		return p, false
+	}
+	return p, true
+}
+
+func (s *Store) SetAdminPin(p AdminPin) error {
+	p.PinnedAt = time.Now().UTC()
+	return s.writeJSON(s.cfg("admin.pin"), p, 0o600)
 }
 
 // --- login / prefs / pins / grants ------------------------------------------
