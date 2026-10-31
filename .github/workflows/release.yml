@@ -20,7 +20,8 @@ jobs:
       - name: Import signing key
         if: env.HAS_GPG == 'true'
         run: printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
-        env: { GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }} }
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
       - name: Release (signed)
         if: env.HAS_GPG == 'true'
         uses: goreleaser/goreleaser-action@v6

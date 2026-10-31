@@ -787,6 +787,9 @@ func (m *Manager) hostTerminal(ctx context.Context, s *Session, conn *p2p.Conn, 
 	h, err := term.StartHost(ctx, ch, opts)
 	if err != nil {
 		s.reason = "shell: " + err.Error()
+		if errors.Is(err, term.ErrNoIsolation) {
+			m.app.Emit(appNotice("session refused: this machine cannot sandbox the visitor shell. Install bubblewrap (bwrap) or enable unprivileged user namespaces."))
+		}
 		return
 	}
 	s.host = h

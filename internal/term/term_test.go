@@ -141,6 +141,11 @@ func startHost(t *testing.T, opt HostOptions) (*Host, *visitorSim) {
 	if opt.realSudo == "" {
 		opt.realSudo = writeFakeSudo(t)
 	}
+	// Generic tests still run where no sandbox is possible (CI runners with
+	// user namespaces disabled); isolation-specific tests check Isolated().
+	if opt.Isolate == IsolateRequired && !isolationOK() {
+		opt.Isolate = IsolateBestEffort
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	h, err := StartHost(ctx, hostEnd, opt)
@@ -800,4 +805,15 @@ func TestUnshareFallback(t *testing.T) {
 		_ = exec.Command("/usr/bin/pkill", "-f", "^sleep 6124").Run()
 		t.Fatal("setsid'd process survived Stop under unshare")
 	}
+}
+
+
+var isolationProbe struct {
+	once sync.Once
+	ok   bool
+}
+
+func isolationOK() bool {
+	isolationProbe.once.Do(func() { isolationProbe.ok = IsolationAvailable() })
+	return isolationProbe.ok
 }

@@ -54,6 +54,22 @@ type sandboxPlan struct {
 	argv []string
 }
 
+// IsolationAvailable reports whether a visitor shell can be sandboxed on
+// this machine (bwrap or unprivileged user namespaces). Callers use it to
+// explain a refused session; tests use it to skip.
+func IsolationAvailable() bool {
+	dir, err := os.MkdirTemp("", "pairdesk-probe")
+	if err != nil {
+		return false
+	}
+	defer os.RemoveAll(dir)
+	plan, err := buildSandbox("/bin/true", nil, nil, dir)
+	if err != nil {
+		return false
+	}
+	return plan.probe(context.Background(), os.Environ()) == nil
+}
+
 // buildSandbox returns the sandbox wrapper for shell+args, or an error
 // when neither bwrap nor unshare is available. hidden are directories to
 // cover with tmpfs (missing ones are skipped: nothing to hide); roBin is

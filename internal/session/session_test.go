@@ -16,6 +16,7 @@ import (
 	"github.com/Kumarsujay03/pairdesk/internal/rendezvous/memory"
 	"github.com/Kumarsujay03/pairdesk/internal/sessionlog"
 	"github.com/Kumarsujay03/pairdesk/internal/store"
+	"github.com/Kumarsujay03/pairdesk/internal/term"
 )
 
 type node struct {
@@ -106,6 +107,9 @@ func befriend(t *testing.T, a, b *node) {
 func TestBoardUnderGrantWithLogs(t *testing.T) {
 	if _, err := os.Stat("/bin/bash"); err != nil {
 		t.Skip("bash required")
+	}
+	if !term.IsolationAvailable() {
+		t.Skip("no sandbox available on this machine (bwrap or user namespaces)")
 	}
 	ms := memory.New()
 	adminN := boot(t, ms, "a@x", "sujay03")
@@ -228,6 +232,9 @@ func TestScreenNeverAutoAcceptsAndRevokeEnds(t *testing.T) {
 	// Revoke ends a live grant session.
 	if _, err := os.Stat("/bin/bash"); err != nil {
 		t.Skip("bash required")
+	}
+	if !term.IsolationAvailable() {
+		t.Skip("no sandbox available on this machine")
 	}
 	done := make(chan error, 1)
 	go func() { done <- adminN.mgr.Request(ctx, "arjun", model.SessionWatch, false) }()
