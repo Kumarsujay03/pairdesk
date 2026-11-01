@@ -34,6 +34,7 @@ func newTestApp(t *testing.T, mem *memory.Store, name string) *app.App {
 		t.Fatal(err)
 	}
 	a := app.New(app.Options{Backend: mem.Client(), Store: st, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	t.Cleanup(a.Close)
 	ctx := context.Background()
 	if err := a.Start(ctx); err != nil {
 		t.Fatal(err)

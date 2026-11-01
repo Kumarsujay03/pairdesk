@@ -31,6 +31,7 @@ func (h *harness) user(email, name string) *App {
 		h.t.Fatal(err)
 	}
 	a := New(Options{Backend: h.store.Client(), Store: st})
+	h.t.Cleanup(a.Close)
 	if err := a.Start(h.ctx); err != nil {
 		h.t.Fatal(err)
 	}

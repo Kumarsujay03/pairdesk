@@ -69,6 +69,7 @@ type App struct {
 	be     rendezvous.Backend
 	st     *store.Store
 	log    *slog.Logger
+	bg     sync.WaitGroup // background goroutines Close waits for
 	id     *crypto.Identity
 	me     model.User
 	login  store.Login
@@ -361,7 +362,7 @@ func (a *App) becomeReady(ctx context.Context, me model.User) error {
 	}
 	if !me.Approved {
 		a.setPhase(PhasePendingApproval)
-		go a.waitForApproval()
+		a.spawn(a.waitForApproval)
 		return nil
 	}
 	if me.PubKey == "" || me.PubKey != a.id.Public().String() {
@@ -517,7 +518,7 @@ func (a *App) connect(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	go a.pump(ch)
+	a.spawn(func() { a.pump(ch) })
 	_ = a.be.SetOnline(ctx, true)
 	var watch []string
 	for _, f := range a.Friends() {
@@ -549,7 +550,7 @@ func (a *App) connect(ctx context.Context) error {
 	if len(watch) > 0 {
 		_ = a.be.WatchPresence(ctx, watch)
 	}
-	go a.heartbeat()
+	a.spawn(a.heartbeat)
 	return nil
 }
 
@@ -568,13 +569,26 @@ func (a *App) heartbeat() {
 	}
 }
 
-// Close signs out of presence and stops everything.
+// Close signs out of presence and stops everything, waiting briefly for
+// background work so nothing writes to the config directory afterwards.
 func (a *App) Close() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_ = a.be.SetOnline(ctx, false)
 	a.cancel()
+	done := make(chan struct{})
+	go func() { a.bg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+	}
 	_ = a.be.Close()
+}
+
+// spawn runs fn in the background and lets Close wait for it.
+func (a *App) spawn(fn func()) {
+	a.bg.Add(1)
+	go func() { defer a.bg.Done(); fn() }()
 }
 
 // SignOut forgets the session but keeps the identity and, for an admin,
