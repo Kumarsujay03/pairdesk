@@ -34,6 +34,13 @@ var ErrDetached = errors.New("term: detached")
 // Stdout is a terminal its size is sent on start and on SIGWINCH. It returns
 // nil when the host says bye, ErrDetached on the escape sequence, or the
 // channel error.
+// ResetSequence puts a terminal back into a known state after a raw
+// session: mouse reporting and bracketed paste off, main screen, full
+// scroll region, default attributes, cursor shown, autowrap on, screen
+// cleared, and the window title back to "pairdesk".
+const ResetSequence = "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l" +
+	"\x1b[?1049l\x1b[r\x1b[0m\x1b[?25h\x1b[?7h\x1b[2J\x1b[H\x1b]0;pairdesk\x07"
+
 func RunVisitor(ctx context.Context, ch p2p.Channel, opt VisitorOptions) error {
 	if opt.Stdin == nil {
 		opt.Stdin = os.Stdin
@@ -45,13 +52,18 @@ func RunVisitor(ctx context.Context, ch p2p.Channel, opt VisitorOptions) error {
 		opt.Escape = 0x1d
 	}
 
-	// Raw mode.
+	// Raw mode. On the way out, undo whatever the remote programs left in
+	// the local terminal (scroll regions from apt's progress bar, mouse
+	// modes, a changed window title, alt screen), or the UI paints garbage.
 	if f, ok := opt.Stdin.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
 		state, err := term.MakeRaw(int(f.Fd()))
 		if err != nil {
 			return err
 		}
-		defer func() { _ = term.Restore(int(f.Fd()), state) }()
+		defer func() {
+			_, _ = io.WriteString(opt.Stdout, ResetSequence)
+			_ = term.Restore(int(f.Fd()), state)
+		}()
 	}
 
 	var wmu sync.Mutex

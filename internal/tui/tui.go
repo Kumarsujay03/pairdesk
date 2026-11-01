@@ -125,6 +125,11 @@ type evMsg struct{ app.Event }
 type animTickMsg time.Time
 type slowTickMsg time.Time
 type updateMsg struct{ tag string }
+
+// RepaintMsg asks the UI to clear the screen, redraw everything and restore
+// the window title; the session layer sends it after handing the terminal
+// back from a raw session.
+type RepaintMsg struct{}
 type bootDoneMsg struct {
 	err         error
 	restart     bool   // a release was installed; exit and re-exec
@@ -590,6 +595,13 @@ func (m *ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *ui) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case RepaintMsg:
+		m.windowTitle = "pairdesk"
+		if m.active != "" {
+			m.windowTitle = "pairdesk · " + m.convTitle()
+		}
+		m.renderChat(true)
+		return m, tea.ClearScreen
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.layout()

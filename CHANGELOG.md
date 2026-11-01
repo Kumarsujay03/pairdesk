@@ -3,6 +3,13 @@
 All notable changes to PairDesk. The section for a tag becomes that release's notes on GitHub.
 Format: [Keep a Changelog](https://keepachangelog.com), versions follow semver.
 
+## [0.1.16] - 2026-11-01
+
+### Fixed
+- Returning from a board, shell or screen session no longer leaves the UI garbled: the terminal
+  is reset (scroll region, mouse modes, alt screen, attributes, window title) and the whole
+  screen is repainted.
+
 ## [0.1.15] - 2026-11-01
 
 ### Changed

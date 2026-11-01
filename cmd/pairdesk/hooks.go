@@ -19,6 +19,7 @@ import (
 	"github.com/Kumarsujay03/pairdesk/internal/model"
 	"github.com/Kumarsujay03/pairdesk/internal/session"
 	"github.com/Kumarsujay03/pairdesk/internal/sessionlog"
+	"github.com/Kumarsujay03/pairdesk/internal/term"
 	"github.com/Kumarsujay03/pairdesk/internal/transfer"
 	"github.com/Kumarsujay03/pairdesk/internal/tui"
 )
@@ -39,7 +40,11 @@ func wire(a *app.App, lock *admin.Lock) (tui.Hooks, func(*tea.Program)) {
 			return err
 		}
 		err := fn(os.Stdin, os.Stdout)
+		// The visitor already reset the terminal; do it again here for
+		// hooks that do not go through RunVisitor, then repaint everything.
+		_, _ = io.WriteString(os.Stdout, term.ResetSequence)
 		_ = p.RestoreTerminal()
+		p.Send(tui.RepaintMsg{})
 		return err
 	}
 	ready := func(p *tea.Program) {

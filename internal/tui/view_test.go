@@ -617,3 +617,12 @@ func TestBootAutoUpdateRestarts(t *testing.T) {
 		t.Fatalf("auto-update should restart before Boot runs (restart=%v booted=%v)", m.restart, booted)
 	}
 }
+
+func TestRepaintAfterRawSession(t *testing.T) {
+	mem := memory.New()
+	m := newTestUI(t, newTestApp(t, mem, "sujay03"))
+	_, cmd := m.Update(RepaintMsg{})
+	if cmd == nil {
+		t.Fatal("repaint should clear the screen and reset the title")
+	}
+}
