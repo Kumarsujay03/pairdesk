@@ -22,6 +22,11 @@ In **SQL Editor → New query**, paste and run each file in this order:
 1. `migrations/0001_schema.sql` – tables, helper functions
 2. `migrations/0002_policies.sql` – Row Level Security and column grants
 3. `migrations/0003_rpc.sql` – server-side functions, realtime policies, privilege grants
+4. `migrations/0004_policy_fixes.sql` – policy corrections (group creation, key publishing,
+   ownership transfer, replies to the admin)
+
+Already running an instance? Run only the migrations you have not applied yet; each is safe to
+run once on top of the previous ones.
 
 Each should finish with "Success, no rows returned". If you need to start over, run
 `drop schema public cascade; create schema public;` and rerun from 0001; `0002` restores the table

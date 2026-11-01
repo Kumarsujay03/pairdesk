@@ -15,6 +15,15 @@ Format: [Keep a Changelog](https://keepachangelog.com), versions follow semver.
   output such as `/help` can be read; `pgup`/`pgdn`, `home` and `end` still work.
 
 ### Fixed
+- Database policies, in the new `supabase/migrations/0004_policy_fixes.sql` (run it once on an
+  existing project): creating a group, publishing a device key on a new device or after
+  `/admin reset-key`, transferring group ownership, and answering a session card from an admin
+  who is not your friend were all refused with `403`.
+- Writes that do not need the row back now ask the server for `return=minimal`, so row-level
+  read policies can no longer reject a successful insert.
+- A second, not-yet-approved admin device now gets a clear message instead of `403` on every
+  admin command; a live change to your own account is re-read in full, so bans and kicks
+  arrive immediately.
 - Admin commands failed with `403 forbidden` when the server no longer recognised the device's
   admin token, for example after the database was recreated. The client now verifies the token
   at start-up and bootstraps a fresh one when it is stale.

@@ -154,6 +154,18 @@ func (a *App) Me() model.User { a.mu.RLock(); defer a.mu.RUnlock(); return a.me 
 // IsAdmin reports whether the current user is the admin.
 func (a *App) IsAdmin() bool { return a.Me().Role == model.RoleAdmin }
 
+// AdminDeviceReady reports whether this device holds an admin token, which
+// the server requires on top of the admin role for every admin command.
+func (a *App) AdminDeviceReady() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.login.AdminToken != ""
+}
+
+// ErrAdminDevicePending explains a refused admin command on a device the
+// admin has not approved yet.
+var ErrAdminDevicePending = errors.New("this device is not an approved admin device yet; run /admin devices on an approved one")
+
 // IsHelper reports helper or admin.
 func (a *App) IsHelperOrAdmin() bool {
 	r := a.Me().Role

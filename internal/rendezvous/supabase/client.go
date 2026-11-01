@@ -209,7 +209,14 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 	req.Header.Set("Accept", "application/json")
 	if strings.HasPrefix(path, "/rest/v1/") && !strings.HasPrefix(path, "/rest/v1/rpc/") && method != http.MethodGet {
-		req.Header.Set("Prefer", "return=representation")
+		// Asking for the row back makes PostgREST add RETURNING, which is
+		// checked against the table's SELECT policies; only ask when the
+		// caller will read the result.
+		if out != nil {
+			req.Header.Set("Prefer", "return=representation")
+		} else {
+			req.Header.Set("Prefer", "return=minimal")
+		}
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {

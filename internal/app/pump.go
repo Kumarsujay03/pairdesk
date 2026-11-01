@@ -149,6 +149,11 @@ func (a *App) handle(e rendezvous.Event) {
 			}
 			return
 		}
+		// Realtime only delivers the columns a user may select, which hides
+		// the moderation columns on our own row; fetch the full row instead.
+		if fresh, err := a.fetchMe(); err == nil {
+			e.User = &fresh
+		}
 		a.mu.Lock()
 		old := a.me
 		a.me = *e.User
@@ -179,4 +184,11 @@ func (a *App) handle(e rendezvous.Event) {
 		_ = a.be.SetOnline(ctx, true)
 		a.emit(Event{Kind: EvReconnected})
 	}
+}
+
+// fetchMe reads our own full row with a short timeout.
+func (a *App) fetchMe() (model.User, error) {
+	ctx, cancel := context.WithTimeout(a.ctx, 10*time.Second)
+	defer cancel()
+	return a.be.Me(ctx)
 }

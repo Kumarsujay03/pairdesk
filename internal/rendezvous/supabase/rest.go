@@ -156,8 +156,12 @@ func (c *Client) UpdatePubKey(ctx context.Context, pubkey string) error {
 	if err != nil {
 		return err
 	}
-	var rows []userRow
-	if err := c.do(ctx, http.MethodPatch, "/rest/v1/users", q("id", "eq."+me),
+	// Only ask for id back: the select grant on users is column-limited and
+	// a bare RETURNING would name every column.
+	var rows []struct {
+		ID string `json:"id"`
+	}
+	if err := c.do(ctx, http.MethodPatch, "/rest/v1/users", q("id", "eq."+me, "select", "id"),
 		map[string]any{"pubkey": pubkey}, &rows); err != nil {
 		return err
 	}

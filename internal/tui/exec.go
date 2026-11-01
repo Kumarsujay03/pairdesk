@@ -53,6 +53,9 @@ func (m *ui) exec(c Command) tea.Cmd {
 			return m.warn(app.ErrNotAdmin.Error())
 		}
 	}
+	if c.Admin && a.IsAdmin() && !a.AdminDeviceReady() && !helperCommands[c.Name] {
+		return m.warn(app.ErrAdminDevicePending.Error())
+	}
 	switch c.Name {
 	case "version":
 		return m.say("pairdesk " + m.version)

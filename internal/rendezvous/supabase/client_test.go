@@ -442,6 +442,11 @@ func TestHeaders(t *testing.T) {
 	if h := f.last("/rest/v1/rpc/me_detail").Header.Get("x-pairdesk-admin-token"); h != "" {
 		t.Errorf("admin token still sent: %q", h)
 	}
+	// Writes that do not read rows back ask for return=minimal so RETURNING
+	// never trips a SELECT policy; the pubkey update names its column.
+	if r := f.last("/rest/v1/rpc/me_detail"); r.Header.Get("Prefer") != "" {
+		t.Errorf("rpc should not carry Prefer: %q", r.Header.Get("Prefer"))
+	}
 	// The server decides whether the token it is sent is still valid.
 	c.SetAdminToken("adm-1")
 	if ok, err := c.AdminTokenValid(ctx); err != nil || !ok {
@@ -550,7 +555,7 @@ func TestUsersAndRegister(t *testing.T) {
 	if err := c.UpdatePubKey(ctx, "NEWPK"); err != nil {
 		t.Fatal(err)
 	}
-	if r := f.last("/rest/v1/users"); r.Method != http.MethodPatch || r.Body != `{"pubkey":"NEWPK"}` || r.Query != "id=eq."+meID {
+	if r := f.last("/rest/v1/users"); r.Method != http.MethodPatch || r.Body != `{"pubkey":"NEWPK"}` || r.Query != "id=eq."+meID+"&select=id" || r.Header.Get("Prefer") != "return=representation" {
 		t.Fatalf("update pubkey: %+v", r)
 	}
 
