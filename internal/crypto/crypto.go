@@ -136,9 +136,7 @@ func (p PublicKey) Phrase() string {
 }
 
 func domainPrefix(domain string, msg []byte) []byte {
-	out := make([]byte, 0, len(domain)+1+len(msg))
-	out = append(out, domain...)
-	out = append(out, 0)
+	out := append([]byte(domain), 0)
 	return append(out, msg...)
 }
 

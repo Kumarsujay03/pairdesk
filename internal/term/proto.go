@@ -38,13 +38,13 @@ type CommandEvent struct {
 
 // WriteFrame writes one frame. Safe for one writer at a time.
 func WriteFrame(w io.Writer, typ byte, payload []byte) error {
-	if len(payload)+1 > maxFrame {
+	if len(payload) >= maxFrame {
 		return errFrameTooBig
 	}
-	buf := make([]byte, 5+len(payload))
-	binary.BigEndian.PutUint32(buf, uint32(len(payload)+1))
-	buf[4] = typ
-	copy(buf[5:], payload)
+	var hdr [4]byte
+	binary.BigEndian.PutUint32(hdr[:], uint32(len(payload))+1)
+	buf := append(hdr[:], typ)
+	buf = append(buf, payload...)
 	_, err := w.Write(buf)
 	return err
 }
