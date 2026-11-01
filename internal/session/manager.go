@@ -93,6 +93,21 @@ func (s *Session) getState() string   { s.smu.Lock(); defer s.smu.Unlock(); retu
 func (s *Session) setReason(r string) { s.smu.Lock(); s.reason = r; s.smu.Unlock() }
 func (s *Session) getReason() string  { s.smu.Lock(); defer s.smu.Unlock(); return s.reason }
 
+// The host, connection and cancel function are set by the goroutine that
+// runs the session and read by whoever ends it; hand them over under smu.
+func (s *Session) setHost(h *term.Host) { s.smu.Lock(); s.host = h; s.smu.Unlock() }
+func (s *Session) setConn(c *p2p.Conn)  { s.smu.Lock(); s.conn = c; s.smu.Unlock() }
+func (s *Session) setCancel(c context.CancelFunc) {
+	s.smu.Lock()
+	s.cancel = c
+	s.smu.Unlock()
+}
+func (s *Session) teardown() (*term.Host, *p2p.Conn, context.CancelFunc) {
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	return s.host, s.conn, s.cancel
+}
+
 // New wires the manager to the app's signaling.
 func New(a *app.App, lock *admin.Lock, log *slog.Logger) *Manager {
 	if log == nil {
@@ -318,14 +333,15 @@ func (m *Manager) onRevoke(userID string) {
 func (s *Session) end(reason string) {
 	s.stopOnce.Do(func() {
 		s.setReason(reason)
-		if s.host != nil {
-			_ = s.host.Stop()
+		host, conn, cancel := s.teardown()
+		if host != nil {
+			_ = host.Stop()
 		}
-		if s.conn != nil {
-			_ = s.conn.Close()
+		if conn != nil {
+			_ = conn.Close()
 		}
-		if s.cancel != nil {
-			s.cancel()
+		if cancel != nil {
+			cancel()
 		}
 	})
 }
@@ -444,7 +460,7 @@ func (m *Manager) Request(ctx context.Context, name string, kind model.SessionKi
 	s.Via, s.Sudo = r.Via, r.Sudo
 
 	sctx, cancel := context.WithCancel(ctx)
-	s.cancel = cancel
+	s.setCancel(cancel)
 	defer cancel()
 	cfg := m.p2pConfig(id)
 	cfg.ReceiveVideo = kind == model.SessionScreen
@@ -460,7 +476,7 @@ func (m *Manager) Request(ctx context.Context, name string, kind model.SessionKi
 		m.finish(s, "connect failed: "+err.Error())
 		return err
 	}
-	s.conn = conn
+	s.setConn(conn)
 	s.setState("live")
 	_ = m.app.Backend().LogSession(ctx, model.SessionLog{ID: id, Visitor: m.app.Me().ID, Host: peer.ID, Kind: kind, Via: s.Via, StartedAt: s.Started})
 	m.app.Emit(app.Event{Kind: app.EvSession, Session: m.info(s)})
@@ -659,7 +675,7 @@ func describe(k model.SessionKind, control bool) string {
 
 func (m *Manager) hostAccept(s *Session, pk crypto.PublicKey) {
 	ctx, cancel := context.WithCancel(context.Background())
-	s.cancel = cancel
+	s.setCancel(cancel)
 	defer cancel()
 	s.setState("connecting")
 	m.app.Emit(app.Event{Kind: app.EvSession, Session: m.info(s)})
@@ -694,7 +710,7 @@ func (m *Manager) hostAccept(s *Session, pk crypto.PublicKey) {
 		m.finish(s, "connect failed: "+err.Error())
 		return
 	}
-	s.conn = conn
+	s.setConn(conn)
 	s.setState("live")
 	_ = m.app.Backend().LogSession(ctx, model.SessionLog{ID: s.ID, Visitor: s.Peer.ID, Host: m.app.Me().ID, Kind: s.Kind, Via: s.Via, StartedAt: s.Started})
 	m.app.Emit(app.Event{Kind: app.EvSession, Session: m.info(s)})
@@ -798,7 +814,7 @@ func (m *Manager) hostTerminal(ctx context.Context, s *Session, conn *p2p.Conn, 
 		}
 		return
 	}
-	s.host = h
+	s.setHost(h)
 	<-h.Done()
 	if err := h.Err(); err != nil && s.reason == "" {
 		s.setReason(err.Error())
@@ -863,14 +879,18 @@ func (m *Manager) shareCard(s *Session) bool {
 // hostShareLoop lets the host type into the shared shell from their own
 // terminal until they detach with ctrl+] q.
 func (m *Manager) hostShareLoop(s *Session) {
+	host, _, _ := s.teardown()
+	if host == nil {
+		return
+	}
 	_ = m.TermUI(func(stdin io.Reader, stdout io.Writer) error {
 		fmt.Fprintf(stdout, "\r\n\x1b[33m● shared terminal with %s · ctrl+] then q to leave\x1b[0m\r\n", s.Peer.Username)
-		s.host.SetShared(true)
-		defer s.host.SetShared(false)
+		host.SetShared(true)
+		defer host.SetShared(false)
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			r := s.host.Transcript()
+			r := host.Transcript()
 			buf := make([]byte, 4096)
 			for {
 				n, err := r.Read(buf)
@@ -886,7 +906,7 @@ func (m *Manager) hostShareLoop(s *Session) {
 		esc := false
 		for {
 			select {
-			case <-s.host.Done():
+			case <-host.Done():
 				return nil
 			default:
 			}
@@ -900,14 +920,14 @@ func (m *Manager) hostShareLoop(s *Session) {
 					if b == 'q' {
 						return nil
 					}
-					_ = s.host.Input([]byte{0x1d, b})
+					_ = host.Input([]byte{0x1d, b})
 					continue
 				}
 				if b == 0x1d {
 					esc = true
 					continue
 				}
-				_ = s.host.Input([]byte{b})
+				_ = host.Input([]byte{b})
 			}
 		}
 	})
