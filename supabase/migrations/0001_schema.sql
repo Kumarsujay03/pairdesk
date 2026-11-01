@@ -2,8 +2,9 @@
 -- public by design and these policies are the only gate. Chat content is
 -- ciphertext; the server never holds a key.
 
-create extension if not exists citext;
-create extension if not exists pgcrypto;
+create schema if not exists extensions;
+create extension if not exists citext with schema extensions;
+create extension if not exists pgcrypto with schema extensions;
 
 -- ---------------------------------------------------------------- settings
 create table instance_settings (
@@ -23,7 +24,7 @@ insert into instance_settings(key, value) values
   ('admin_pubkey',     '""');
 
 create or replace function setting(k text) returns jsonb
-language sql stable security definer set search_path = public as
+language sql stable security definer set search_path = public, extensions as
 $$ select value from instance_settings where key = k $$;
 
 -- ------------------------------------------------------------------- users
@@ -60,7 +61,7 @@ language sql stable as
 $$ select coalesce(current_setting('request.headers', true)::json->>'x-pairdesk-admin-token', '') $$;
 
 create or replace function is_admin() returns boolean
-language sql stable security definer set search_path = public as $$
+language sql stable security definer set search_path = public, extensions as $$
   select exists (
     select 1 from users u
     join admin_devices d on d.user_id = u.id
@@ -70,14 +71,14 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 create or replace function is_helper_or_admin() returns boolean
-language sql stable security definer set search_path = public as $$
+language sql stable security definer set search_path = public, extensions as $$
   select is_admin() or exists (
     select 1 from users where id = auth.uid() and role = 'helper' and not banned and approved
   )
 $$;
 
 create or replace function is_active() returns boolean
-language sql stable security definer set search_path = public as $$
+language sql stable security definer set search_path = public, extensions as $$
   select exists (
     select 1 from users where id = auth.uid() and not banned and approved
   )
@@ -101,7 +102,7 @@ create unique index friendships_pair_idx on friendships (least(requester, addres
 
 -- Only answers about the caller (or for the admin), so it is not an oracle.
 create or replace function are_friends(a uuid, b uuid) returns boolean
-language sql stable security definer set search_path = public as $$
+language sql stable security definer set search_path = public, extensions as $$
   select (auth.uid() in (a, b) or is_admin()) and exists (
     select 1 from friendships
     where status = 'accepted'
@@ -130,11 +131,11 @@ create table group_members (
 );
 
 create or replace function is_member(g uuid, u uuid) returns boolean
-language sql stable security definer set search_path = public as
+language sql stable security definer set search_path = public, extensions as
 $$ select (u = auth.uid() or is_admin()) and exists (select 1 from group_members where group_id = g and user_id = u) $$;
 
 create or replace function is_owner(g uuid, u uuid) returns boolean
-language sql stable security definer set search_path = public as
+language sql stable security definer set search_path = public, extensions as
 $$ select (u = auth.uid() or is_admin()) and exists (select 1 from groups where id = g and owner = u) $$;
 
 -- ---------------------------------------------------------------- messages
@@ -162,7 +163,7 @@ language sql immutable as $$
 $$;
 
 create or replace function can_read_conv(ct text, conv text) returns boolean
-language sql stable security definer set search_path = public as $$
+language sql stable security definer set search_path = public, extensions as $$
   select case
     when ct = 'dm' then dm_party(conv, auth.uid())
       and split_part(conv, ':', 1) < split_part(conv, ':', 2)

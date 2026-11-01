@@ -3,16 +3,16 @@
 -- and admin actions (which must also log).
 
 create or replace function admin_log_write(a text, t text, d text) returns void
-language sql security definer set search_path = public as
+language sql security definer set search_path = public, extensions as
 $$ insert into admin_log(actor, action, target, detail) values (auth.uid(), a, t, d) $$;
 
 -- Registration -------------------------------------------------------------
 create or replace function check_username(name text) returns boolean
-language sql stable security definer set search_path = public as
+language sql stable security definer set search_path = public, extensions as
 $$ select not exists (select 1 from users where username = name) and name ~ '^[a-z0-9_]{3,20}$' $$;
 
 create or replace function register_username(name text, pub text, invite text default null)
-returns users language plpgsql security definer set search_path = public as $$
+returns users language plpgsql security definer set search_path = public, extensions as $$
 declare
   mode text := setting('registration') #>> '{}';
   cap int := (setting('user_cap') #>> '{}')::int;
@@ -54,7 +54,7 @@ end $$;
 
 -- Messages -------------------------------------------------------------------
 create or replace function bump_rate(bucket text, per_min int) returns boolean
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = public, extensions as $$
 declare r rate_limits;
 begin
   if per_min <= 0 then return true; end if;
@@ -71,7 +71,7 @@ begin
 end $$;
 
 create or replace function send_message(ct text, conv text, cipher bytea, n bytea, epoch int)
-returns messages language plpgsql security definer set search_path = public as $$
+returns messages language plpgsql security definer set search_path = public, extensions as $$
 declare m messages; me users;
 begin
   select * into me from users where id = auth.uid();
@@ -91,7 +91,7 @@ end $$;
 
 -- Friend requests with denial cooldown ---------------------------------------
 create or replace function send_friend_request(target uuid) returns void
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = public, extensions as $$
 declare f friendships;
 begin
   if not is_active() or not maintenance_ok() then raise exception 'forbidden' using errcode = '42501'; end if;
@@ -115,7 +115,7 @@ end $$;
 
 -- Group key rotation: replace every member's wrapped key atomically ---------
 create or replace function rotate_group_key(g uuid, new_epoch int, members jsonb) returns void
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = public, extensions as $$
 declare m jsonb;
 begin
   if not is_owner(g, auth.uid()) then raise exception 'forbidden' using errcode = '42501'; end if;
@@ -129,7 +129,7 @@ end $$;
 
 -- Signaling (rate limited) ----------------------------------------------------
 create or replace function send_signal(sid text, target uuid, t text, p bytea) returns bigint
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = public, extensions as $$
 declare rid bigint;
 begin
   if not is_active() or not maintenance_ok() then raise exception 'forbidden' using errcode = '42501'; end if;
@@ -146,24 +146,24 @@ end $$;
 
 -- Own full row (moderation columns are hidden from the table grant).
 create or replace function me_detail() returns jsonb
-language sql stable security definer set search_path = public as $$
+language sql stable security definer set search_path = public, extensions as $$
   select to_jsonb(u) from users u where u.id = auth.uid()
 $$;
 
 -- Admin-only full user row (moderation columns are hidden from the table grant).
 create or replace function admin_user_detail(target uuid) returns jsonb
-language sql stable security definer set search_path = public as $$
+language sql stable security definer set search_path = public, extensions as $$
   select case when is_admin() then to_jsonb(u) else null end from users u where u.id = target
 $$;
 
 create or replace function admin_list_users() returns setof users
-language sql stable security definer set search_path = public as $$
+language sql stable security definer set search_path = public, extensions as $$
   select * from users where is_admin()
 $$;
 
 -- Admin ----------------------------------------------------------------------
 create or replace function admin_set_setting(k text, v jsonb) returns void
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = public, extensions as $$
 begin
   if not is_admin() then raise exception 'forbidden' using errcode = '42501'; end if;
   update instance_settings set value = v where key = k;
@@ -171,7 +171,7 @@ begin
 end $$;
 
 create or replace function admin_set_user(target uuid, flag text, val boolean) returns void
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = public, extensions as $$
 begin
   if not is_admin() then raise exception 'forbidden' using errcode = '42501'; end if;
   if flag = 'banned' then update users set banned = val where id = target;
@@ -182,7 +182,7 @@ begin
 end $$;
 
 create or replace function admin_set_role(target uuid, r text) returns void
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = public, extensions as $$
 begin
   if not is_admin() then raise exception 'forbidden' using errcode = '42501'; end if;
   if r not in ('user','helper') then raise exception 'bad role'; end if;
@@ -191,7 +191,7 @@ begin
 end $$;
 
 create or replace function admin_rename(target uuid, newname text) returns void
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = public, extensions as $$
 begin
   if not is_admin() then raise exception 'forbidden' using errcode = '42501'; end if;
   update users set username = newname where id = target;
@@ -199,7 +199,7 @@ begin
 end $$;
 
 create or replace function admin_reset_key(target uuid) returns void
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = public, extensions as $$
 begin
   if not is_admin() then raise exception 'forbidden' using errcode = '42501'; end if;
   update users set pubkey = '' where id = target;
@@ -208,7 +208,7 @@ begin
 end $$;
 
 create or replace function admin_kick(target uuid) returns void
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = public, extensions as $$
 begin
   if not is_admin() then raise exception 'forbidden' using errcode = '42501'; end if;
   update users set kicked_at = now() where id = target;
@@ -216,7 +216,7 @@ begin
 end $$;
 
 create or replace function admin_create_invite(uses int, expires timestamptz) returns invites
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = public, extensions as $$
 declare i invites;
 begin
   if not is_admin() then raise exception 'forbidden' using errcode = '42501'; end if;
@@ -227,7 +227,7 @@ begin
 end $$;
 
 create or replace function admin_approve_device(dev text) returns text
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = public, extensions as $$
 declare tok text := encode(gen_random_bytes(32), 'hex');
 begin
   if not is_admin() then raise exception 'forbidden' using errcode = '42501'; end if;
@@ -240,7 +240,7 @@ end $$;
 -- Bootstrap: the very first admin device self-approves. Only works while the
 -- admin has zero approved devices.
 create or replace function admin_bootstrap_device(dev text, pub text) returns text
-language plpgsql security definer set search_path = public as $$
+language plpgsql security definer set search_path = public, extensions as $$
 declare tok text := encode(gen_random_bytes(32), 'hex');
 begin
   if not exists (select 1 from users where id = auth.uid() and role = 'admin') then
@@ -256,7 +256,7 @@ begin
 end $$;
 
 create or replace function admin_stats() returns jsonb
-language sql stable security definer set search_path = public as $$
+language sql stable security definer set search_path = public, extensions as $$
   select case when is_admin() then jsonb_build_object(
     'users_total',   (select count(*) from users),
     'users_today',   (select count(*) from users where last_seen > now() - interval '1 day'),
@@ -267,12 +267,12 @@ language sql stable security definer set search_path = public as $$
 $$;
 
 create or replace function touch_last_seen() returns void
-language sql security definer set search_path = public as
+language sql security definer set search_path = public, extensions as
 $$ update users set last_seen = now() where id = auth.uid() $$;
 
 -- Housekeeping: drop old signals and expired denials.
 create or replace function housekeeping() returns void
-language sql security definer set search_path = public as $$
+language sql security definer set search_path = public, extensions as $$
   delete from signals where created_at < now() - interval '10 minutes';
   delete from friendships where status = 'pending' and created_at < now() - interval '7 days';
 $$;
