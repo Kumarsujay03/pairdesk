@@ -7,12 +7,13 @@ plaintext message, a session, or a private key. Setup takes about 15 minutes.
 ## 1. Create the project
 
 1. Sign in at https://supabase.com and create a new project (free plan, any region near your users).
-2. Open **Project Settings → API** and note:
-   - the **Project URL** (`https://<ref>.supabase.co`)
-   - the **anon public** key (`eyJ…`)
+2. Note two values:
+   - the **Project URL**, `https://<project id>.supabase.co` (Project Settings → General)
+   - the **publishable key**, `sb_publishable_…` (Project Settings → API Keys). Older projects
+     show a legacy **anon** JWT (`eyJ…`) instead; both work.
 
 Both are public by design. Row Level Security is the gate, not these values. Never use the
-`service_role` key anywhere in PairDesk.
+**secret** key (`sb_secret_…`, formerly `service_role`) anywhere in PairDesk.
 
 ## 2. Load the schema
 
@@ -43,14 +44,14 @@ hour, enough for a small crew; add custom SMTP under **Authentication → SMTP**
 ## 5. Build the client with the project baked in
 
 ```bash
-go build -ldflags "-X main.supabaseURL=https://<ref>.supabase.co -X main.supabaseAnon=<anon key>" ./cmd/pairdesk
+go build -ldflags "-X main.supabaseURL=https://<ref>.supabase.co -X main.supabaseAnon=<publishable key>" ./cmd/pairdesk
 ```
 
 For development, environment variables work instead of linker flags:
 
 ```bash
 export PAIRDESK_SUPABASE_URL=https://<ref>.supabase.co
-export PAIRDESK_SUPABASE_ANON=<anon key>
+export PAIRDESK_SUPABASE_ANON=<publishable key>
 go run ./cmd/pairdesk
 ```
 
