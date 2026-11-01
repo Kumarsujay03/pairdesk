@@ -214,6 +214,16 @@ func (a *App) rotateGroup(ctx context.Context, g model.Group) error {
 	if err != nil {
 		return err
 	}
+	// The local copy of the group may lag the server by an event or two
+	// (the creation rotation, an earlier invite), so take the epoch from the
+	// server rather than risk a conflict on a stale number.
+	if gs, err := a.be.ListGroups(ctx); err == nil {
+		for _, cur := range gs {
+			if cur.ID == g.ID && cur.KeyEpoch > g.KeyEpoch {
+				g.KeyEpoch = cur.KeyEpoch
+			}
+		}
+	}
 	epoch := g.KeyEpoch + 1
 	var out []model.GroupMember
 	for _, m := range ms {
