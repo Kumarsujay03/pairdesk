@@ -40,7 +40,10 @@ func (b *bytea) UnmarshalJSON(data []byte) error {
 
 func encodeBytea(b []byte) string { return `\x` + hex.EncodeToString(b) }
 
-// decodeBytea accepts PostgreSQL hex form and, leniently, base64.
+// decodeBytea accepts PostgreSQL hex form ("\x..." from PostgREST), bare
+// hex (Realtime change records drop the prefix), and, leniently, base64.
+// Bare hex is tried before base64: a hex string is also valid base64 when
+// its length divides by four, and would decode to garbage.
 func decodeBytea(s string) ([]byte, error) {
 	if strings.HasPrefix(s, `\x`) || strings.HasPrefix(s, `\X`) {
 		v, err := hex.DecodeString(s[2:])
@@ -51,6 +54,11 @@ func decodeBytea(s string) ([]byte, error) {
 	}
 	if s == "" {
 		return []byte{}, nil
+	}
+	if len(s)%2 == 0 && allHex([]byte(s)) {
+		if v, err := hex.DecodeString(s); err == nil {
+			return v, nil
+		}
 	}
 	if v, err := base64.StdEncoding.DecodeString(s); err == nil {
 		return v, nil

@@ -169,11 +169,14 @@ func dbConfig(me string, admin bool) map[string]any {
 	}
 }
 
+// presenceConfig joins a user's private presence channel. "enabled" matters:
+// newer Realtime servers only send presence_state/presence_diff to channels
+// that track or explicitly opt in, and a watcher never tracks.
 func presenceConfig(me string) map[string]any {
 	return map[string]any{
 		"postgres_changes": []any{},
 		"broadcast":        map[string]any{"self": false},
-		"presence":         map[string]any{"key": me},
+		"presence":         map[string]any{"key": me, "enabled": true},
 		"private":          true,
 	}
 }

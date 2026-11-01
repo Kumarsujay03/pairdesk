@@ -39,3 +39,20 @@ func TestUndoubleByteaWithPrefixInside(t *testing.T) {
 		t.Fatalf("got %x", row.Ciphertext)
 	}
 }
+
+func TestDecodeByteaBareHexFromRealtime(t *testing.T) {
+	// Realtime change records: bare hex, no prefix. Length 8 is also valid
+	// base64, which used to win and produce garbage.
+	v, err := decodeBytea("92a6edd7")
+	if err != nil || string(v) != "\x92\xa6\xed\xd7" {
+		t.Fatalf("bare hex: %x %v", v, err)
+	}
+	// Odd-length-in-hex-terms strings are still base64.
+	v, err = decodeBytea("aGk=")
+	if err != nil || string(v) != "hi" {
+		t.Fatalf("base64: %q %v", v, err)
+	}
+	if _, err := decodeBytea("\\x92a6"); err != nil {
+		t.Fatal(err)
+	}
+}

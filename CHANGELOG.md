@@ -3,6 +3,15 @@
 All notable changes to PairDesk. The section for a tag becomes that release's notes on GitHub.
 Format: [Keep a Changelog](https://keepachangelog.com), versions follow semver.
 
+## [0.1.14] - 2026-11-01
+
+### Fixed
+- Live messages now decrypt: Realtime delivers bytea columns as bare hex without the `\x`
+  prefix, which the client mistook for base64 (garbage, or a dropped message depending on
+  length). Bare hex is now decoded as hex.
+- Friends show as online: watcher presence channels opt in with `enabled: true`, which newer
+  Realtime servers require before they send presence state to a channel that does not track.
+
 ## [0.1.13] - 2026-11-01
 
 ### Added
