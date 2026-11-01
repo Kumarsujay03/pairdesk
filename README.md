@@ -37,7 +37,8 @@ commands are only suggested to those roles. `/update` installs the latest releas
 ## Building
 
 ```
-go build -ldflags "-X main.supabaseURL=https://xxx.supabase.co -X main.supabaseAnon=sb_publishable_..." ./cmd/pairdesk
+cp .env.example .env   # fill in your project URL and publishable key once
+make build             # -> ~/.local/bin/pairdesk
 ```
 
 `pairdesk --demo` runs against an in-memory backend with no network (OTP is `000000`), useful for trying the UI.
