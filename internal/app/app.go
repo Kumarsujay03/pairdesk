@@ -274,7 +274,11 @@ func (a *App) VerifyOTP(ctx context.Context, code string) error {
 	if err != nil {
 		return err
 	}
-	a.login = store.Login{Email: email, UserID: sess.UserID, RefreshToken: sess.RefreshToken, DeviceID: a.deviceID()}
+	kept, _ := a.st.Login()
+	a.login = store.Login{Email: email, UserID: sess.UserID, RefreshToken: sess.RefreshToken, DeviceID: a.deviceID(), AdminToken: kept.AdminToken}
+	if ab, ok := a.be.(AdminBootstrapper); ok {
+		ab.SetAdminToken(a.login.AdminToken)
+	}
 	if err := a.st.SaveLogin(a.login); err != nil {
 		return err
 	}
@@ -284,6 +288,9 @@ func (a *App) VerifyOTP(ctx context.Context, code string) error {
 func (a *App) deviceID() string {
 	if a.login.DeviceID != "" {
 		return a.login.DeviceID
+	}
+	if kept, err := a.st.Login(); err == nil && kept.DeviceID != "" {
+		return kept.DeviceID
 	}
 	fp := a.id.Public().Fingerprint()
 	return fmt.Sprintf("%x", fp[:8])
@@ -570,10 +577,13 @@ func (a *App) Close() {
 	_ = a.be.Close()
 }
 
-// SignOut forgets the login but keeps the identity.
+// SignOut forgets the session but keeps the identity and, for an admin,
+// this machine's approved-device token, so signing back in here needs no
+// new device approval. A different account signing in later gets the stale
+// token cleared by ensureAdminDevice.
 func (a *App) SignOut(ctx context.Context) error {
 	_ = a.be.SignOut(ctx)
-	return a.st.ClearLogin()
+	return a.st.ForgetSession()
 }
 
 // --- users ---------------------------------------------------------------

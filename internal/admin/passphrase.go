@@ -24,8 +24,8 @@ const (
 	argonKeyLen  = 32
 )
 
-var ErrLocked = errors.New("admin: locked; enter your passphrase")
-var ErrWrong = errors.New("admin: wrong passphrase")
+var ErrLocked = errors.New("locked; enter your passphrase")
+var ErrWrong = errors.New("wrong passphrase")
 
 type record struct {
 	Salt []byte `json:"salt"`
@@ -47,13 +47,31 @@ type Lock struct {
 // NewLock uses <configDir>/admin.pass.
 func NewLock(configDir string) *Lock { return &Lock{path: filepath.Join(configDir, "admin.pass")} }
 
+// NewLockAt uses an explicit file, for locks other than the admin one
+// (the optional start-up passkey lives in <configDir>/app.pass).
+func NewLockAt(path string) *Lock { return &Lock{path: path} }
+
+// Remove deletes the passphrase after verifying it.
+func (l *Lock) Remove(pass string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !l.IsSet() {
+		return nil
+	}
+	if err := l.check(pass); err != nil {
+		return err
+	}
+	l.unlocked = time.Time{}
+	return os.Remove(l.path)
+}
+
 // IsSet reports whether a passphrase exists.
 func (l *Lock) IsSet() bool { _, err := os.Stat(l.path); return err == nil }
 
 // Set stores a new passphrase (requires the old one when already set).
 func (l *Lock) Set(old, pass string) error {
 	if len(pass) < 8 {
-		return errors.New("admin: passphrase must be at least 8 characters")
+		return errors.New("passphrase must be at least 8 characters")
 	}
 	if l.IsSet() {
 		if err := l.check(old); err != nil {
@@ -101,7 +119,7 @@ func (l *Lock) Unlock(pass string) error {
 	l.mu.Lock()
 	if l.fails >= 5 && time.Since(l.lastFail) < 30*time.Second {
 		l.mu.Unlock()
-		return errors.New("admin: too many attempts; wait 30 seconds")
+		return errors.New("too many attempts; wait 30 seconds")
 	}
 	l.mu.Unlock()
 	if err := l.check(pass); err != nil {

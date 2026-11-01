@@ -470,3 +470,45 @@ func TestAdminSeesPendingSignups(t *testing.T) {
 		t.Fatalf("still pending: %+v, %v", us, err)
 	}
 }
+
+func TestSignOutKeepsAdminDevice(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("a@x", "sujay03")
+	waitPhase(t, admin, PhaseReady)
+	before, _ := admin.Store().Login()
+	if before.DeviceID == "" {
+		t.Fatal("no device id recorded")
+	}
+	if err := admin.SignOut(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	after, err := admin.Store().Login()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.RefreshToken != "" {
+		t.Fatal("session token kept after sign-out")
+	}
+	if after.DeviceID != before.DeviceID || after.AdminToken != before.AdminToken {
+		t.Fatalf("device identity lost on sign-out: %+v vs %+v", after, before)
+	}
+	// Signing in again on the same machine resumes as the same device.
+	a2 := New(Options{Backend: h.store.Client(), Store: admin.Store()})
+	if err := a2.Start(h.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if a2.Phase() != PhaseNeedLogin {
+		t.Fatalf("phase %v", a2.Phase())
+	}
+	if err := a2.RequestLogin(h.ctx, "a@x"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a2.VerifyOTP(h.ctx, memory.TestOTP); err != nil {
+		t.Fatal(err)
+	}
+	waitPhase(t, a2, PhaseReady)
+	again, _ := a2.Store().Login()
+	if again.DeviceID != before.DeviceID {
+		t.Fatalf("device id changed on re-login: %s vs %s", again.DeviceID, before.DeviceID)
+	}
+}

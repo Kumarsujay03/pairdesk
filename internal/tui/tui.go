@@ -4,6 +4,7 @@
 package tui
 
 import (
+	"github.com/Kumarsujay03/pairdesk/internal/admin"
 	"github.com/Kumarsujay03/pairdesk/internal/update"
 	"strconv"
 	"context"
@@ -72,6 +73,9 @@ type Options struct {
 	// ProgramReady is called with the running program so the session layer
 	// can release and restore the terminal around a raw session.
 	ProgramReady func(p *tea.Program)
+	// AppLock is the optional start-up passkey (/passkey set). When one is
+	// set, the boot screen asks for it before Boot runs.
+	AppLock *admin.Lock
 	// Boot, when set, is run in the background as soon as the screen is up
 	// (normally app.Resume). The boot screen shows its progress; the app's
 	// phase events take over once it finishes.
@@ -219,6 +223,9 @@ type ui struct {
 	sugBase      string // line that started a tab-completion cycle
 	latest       string // newer release tag, when one is known
 	boot         func(ctx context.Context) error
+	applock      *admin.Lock
+	locked       bool            // waiting for the start-up passkey
+	passkey      textinput.Model // start-up passkey prompt
 	bootStep     string // what startup is doing right now
 	bootErr      string // startup failure, shown with a retry hint
 	announcement string
@@ -273,6 +280,7 @@ func newModel(ctx context.Context, a *app.App, o Options) *ui {
 		th:      th,
 		version: o.Version,
 		boot:    o.Boot,
+		applock: o.AppLock,
 		demo:    o.Demo,
 		reduced: prefs.ReducedMotion || o.ReducedMotion,
 		width:   80,
@@ -290,6 +298,12 @@ func newModel(ctx context.Context, a *app.App, o Options) *ui {
 	m.input.Prompt = "> "
 	m.masked = newInput("sudo password", 256)
 	m.masked.EchoMode = textinput.EchoPassword
+	m.passkey = newInput("passkey", 256)
+	m.passkey.EchoMode = textinput.EchoPassword
+	m.passkey.Prompt = "> "
+	if m.applock != nil && m.applock.IsSet() && m.phase == app.PhaseBoot {
+		m.locked = true
+	}
 	m.spin = spinner.New()
 	m.spin.Spinner = spinner.Points
 	m.spin.Style = th.Primary
@@ -332,6 +346,10 @@ func (m *ui) focusForPhase() {
 	m.invite.Blur()
 	m.input.Blur()
 	switch m.phase {
+	case app.PhaseBoot:
+		if m.locked {
+			m.passkey.Focus()
+		}
 	case app.PhaseNeedLogin:
 		m.email.Focus()
 	case app.PhaseNeedOTP:
@@ -373,7 +391,7 @@ func (m *ui) Init() tea.Cmd {
 
 // runBoot starts the background startup work, if any was configured.
 func (m *ui) runBoot() tea.Cmd {
-	if m.boot == nil || m.phase != app.PhaseBoot {
+	if m.boot == nil || m.phase != app.PhaseBoot || m.locked {
 		return nil
 	}
 	m.bootErr = ""
@@ -664,6 +682,11 @@ func (m *ui) updateInputs(msg tea.Msg) tea.Cmd {
 	var cmds []tea.Cmd
 	var cmd tea.Cmd
 	switch m.phase {
+	case app.PhaseBoot:
+		if m.locked {
+			m.passkey, cmd = m.passkey.Update(msg)
+			cmds = append(cmds, cmd)
+		}
 	case app.PhaseNeedLogin:
 		m.email, cmd = m.email.Update(msg)
 		cmds = append(cmds, cmd)
@@ -863,7 +886,66 @@ func (m *ui) enterReady() tea.Cmd {
 	for _, g := range m.app.Groups() {
 		cmds = append(cmds, m.fetchMembers(g.Group.ID))
 	}
+	if cmd := m.digestCmd(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	return tea.Batch(cmds...)
+}
+
+// digestCmd shows a short "while you were away" summary on the first open
+// of a calendar day: unread conversations, friend requests and, for the
+// admin, sign-ups waiting plus the registration mode. It returns nil when
+// the client was already opened today.
+func (m *ui) digestCmd() tea.Cmd {
+	st := m.app.Store()
+	p := st.Prefs()
+	now := time.Now()
+	y, mo, d := now.Date()
+	midnight := time.Date(y, mo, d, 0, 0, 0, 0, now.Location())
+	first := p.LastOpened.IsZero() || p.LastOpened.Before(midnight)
+	p.LastOpened = now
+	_ = st.SavePrefs(p)
+	if !first {
+		return nil
+	}
+	app := m.app
+	return m.run("", func(ctx context.Context) ([]string, error) {
+		lines := []string{"today's digest · " + now.Format("Mon Jan 02")}
+		var unread []string
+		for _, c := range app.Conversations() {
+			if n := app.Unread(c); n > 0 {
+				unread = append(unread, fmt.Sprintf("%s (%d)", app.ConvTitle(c), n))
+			}
+		}
+		if len(unread) > 0 {
+			lines = append(lines, "  unread: "+strings.Join(unread, ", "))
+		} else {
+			lines = append(lines, "  no unread messages")
+		}
+		if rs := app.PendingRequests(); len(rs) > 0 {
+			var names []string
+			for _, r := range rs {
+				names = append(names, r.Username)
+			}
+			lines = append(lines, fmt.Sprintf("  %d friend request(s): %s · /requests", len(rs), strings.Join(names, ", ")))
+		}
+		if app.IsAdmin() {
+			if us, err := app.PendingUsers(ctx); err == nil && len(us) > 0 {
+				var names []string
+				for _, u := range us {
+					names = append(names, u.Username)
+				}
+				lines = append(lines, fmt.Sprintf("  %d sign-up(s) waiting for approval: %s · /admin pending", len(us), strings.Join(names, ", ")))
+			}
+			s := app.Settings()
+			approval := "off"
+			if s.RequireApproval {
+				approval = "on"
+			}
+			lines = append(lines, fmt.Sprintf("  registration: %s · approval: %s · /admin reg open|closed|invite", s.Registration, approval))
+		}
+		return lines, nil
+	})
 }
 
 // fetchMembers caches a group's member set for the online count.

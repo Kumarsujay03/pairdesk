@@ -70,6 +70,8 @@ var commands = map[string]cmdSpec{
 	"revoke":   {usage: "/revoke <user>", desc: "withdraw a standing grant"},
 	"grants":   {usage: "/grants", desc: "grants you gave and hold"},
 	"quit":     {usage: "/quit", desc: "exit pairdesk"},
+	"logout":   {usage: "/logout", desc: "sign out on this device (identity and admin device are kept)"},
+	"passkey":  {usage: "/passkey set|off", desc: "optional passkey asked every time pairdesk starts"},
 	"end":      {usage: "/end", desc: "end the current session"},
 	"stop":     {usage: "/stop", desc: "kill switch: end any session on this machine"},
 	"board":    {admin: true, usage: "/board <user>", desc: "open a friend's terminal (needs consent or a grant)"},

@@ -3,6 +3,17 @@
 All notable changes to PairDesk. The section for a tag becomes that release's notes on GitHub.
 Format: [Keep a Changelog](https://keepachangelog.com), versions follow semver.
 
+## [0.1.7] - 2026-11-01
+
+### Added
+- Optional start-up passkey: `/passkey set` makes PairDesk ask for it every time it starts on
+  that machine (Argon2id, stored locally); `/passkey off` removes it. Any user can set one.
+- `/logout` signs out on this device. The identity key and, for the admin, the approved
+  device token are kept, so signing back in on the same machine needs no new device approval.
+- Daily digest: on the first open of each day the chat lists unread conversations, friend
+  requests and, for the admin, sign-ups waiting plus the registration and approval modes.
+- The admin's status bar shows the registration mode (`reg open|closed|invite`).
+
 ## [0.1.6] - 2026-11-01
 
 ### Added
@@ -107,6 +118,7 @@ First release.
 - Peer-to-peer file drop, shared terminal, desktop notifications, self-updater, one-line installer.
 - Supabase (free tier) as rendezvous with Row Level Security and server-side functions.
 
+[0.1.7]: https://github.com/Kumarsujay03/pairdesk/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/Kumarsujay03/pairdesk/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/Kumarsujay03/pairdesk/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Kumarsujay03/pairdesk/compare/v0.1.3...v0.1.4

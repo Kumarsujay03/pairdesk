@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"github.com/Kumarsujay03/pairdesk/internal/admin"
 	"context"
 	"errors"
 	"io"
@@ -427,5 +428,100 @@ func TestArrowKeysScrollChatWhenStripClosed(t *testing.T) {
 	press(m, tea.KeyDown)
 	if m.sugIdx != 1 {
 		t.Fatalf("strip should own the arrows: idx=%d", m.sugIdx)
+	}
+}
+
+func TestDailyDigestAndRegStatus(t *testing.T) {
+	mem := memory.New()
+	admin := newTestApp(t, mem, "sujay03")
+	m := newTestUI(t, admin)
+	if v := m.View(); !strings.Contains(v, "reg open") {
+		t.Fatalf("registration mode missing from the admin status bar:\n%s", v)
+	}
+	// The ready event already consumed today's digest; make it a new day.
+	p := admin.Store().Prefs()
+	p.LastOpened = time.Time{}
+	_ = admin.Store().SavePrefs(p)
+	cmd := m.digestCmd()
+	if cmd == nil {
+		t.Fatal("first open of the day should produce a digest")
+	}
+	m.Update(cmd())
+	v := m.View()
+	for _, want := range []string{"today's digest", "no unread messages", "registration: open · approval: off"} {
+		if !strings.Contains(v, want) {
+			t.Fatalf("digest lacks %q:\n%s", want, v)
+		}
+	}
+	if m.digestCmd() != nil {
+		t.Fatal("second open on the same day must not repeat the digest")
+	}
+	user := newTestApp(t, mem, "priya")
+	um := newTestUI(t, user)
+	if v := um.View(); strings.Contains(v, "reg open") {
+		t.Fatalf("user status bar shows the registration mode:\n%s", v)
+	}
+}
+
+func TestStartupPasskeyGatesBoot(t *testing.T) {
+	mem := memory.New()
+	ready := newTestApp(t, mem, "sujay03")
+	st := ready.Store()
+	lock := admin.NewLockAt(filepath.Join(t.TempDir(), "app.pass"))
+	if err := lock.Set("", "open-sesame"); err != nil {
+		t.Fatal(err)
+	}
+	a2 := app.New(app.Options{Backend: mem.Client(), Store: st})
+	if err := a2.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	booted := make(chan struct{}, 1)
+	m := newModel(context.Background(), a2, Options{Version: "test", AppLock: lock, Boot: func(ctx context.Context) error {
+		err := a2.Resume(ctx)
+		booted <- struct{}{}
+		return err
+	}})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if cmd := m.Init(); cmd != nil {
+		// Init must not start Boot while locked; drain any batch to be sure.
+		select {
+		case <-booted:
+			t.Fatal("boot ran before the passkey was entered")
+		default:
+		}
+	}
+	if v := m.View(); !strings.Contains(v, "locked") || !strings.Contains(v, "passkey") {
+		t.Fatalf("lock screen missing:\n%s", v)
+	}
+	keys(m, "wrong-one")
+	press(m, tea.KeyEnter)
+	if v := m.View(); !strings.Contains(v, "wrong passphrase") {
+		t.Fatalf("wrong passkey not reported:\n%s", v)
+	}
+	keys(m, "open-sesame")
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.locked || cmd == nil {
+		t.Fatal("correct passkey did not unlock and start boot")
+	}
+	// Run the returned batch far enough to see Boot invoked.
+	runCmds(t, cmd, booted)
+}
+
+// runCmds executes a command tree until the boot signal arrives.
+func runCmds(t *testing.T, cmd tea.Cmd, booted chan struct{}) {
+	t.Helper()
+	msg := cmd()
+	if b, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range b {
+			if c == nil {
+				continue
+			}
+			go c()
+		}
+	}
+	select {
+	case <-booted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("boot never ran after unlocking")
 	}
 }

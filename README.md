@@ -28,7 +28,8 @@ Full design: [PAIRDESK.md](PAIRDESK.md). Backend setup: [supabase/README.md](sup
 | `/send <user> <path>` `/share` | file drop, shared terminal |
 | `/logs` `/stop` | your session records, kill switch |
 | `/verify <user>` `/search <text>` `/theme <name>` `/notify on\|off` | misc |
-| `/admin …` | instance controls (admin only), see `/help` |
+| `/passkey set\|off` `/logout` | optional start-up passkey; sign out on this device |
+| `/admin pending` `/admin approve-user <user>` `/admin …` | approval queue and instance controls (admin only), see `/help` |
 
 Type `/` and a suggestion strip lists what you can run; `up`/`down` pick, `enter` runs or fills in, `tab` completes and cycles. With the strip closed, `up`/`down` scroll the chat. Admin and helper
 commands are only suggested to those roles. `/update` installs the latest release in place; the status bar shows the running version and says when a newer one exists.

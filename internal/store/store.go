@@ -74,6 +74,9 @@ type Prefs struct {
 	ShowBadge     bool   `json:"show_badge"`
 	LogKeepDays   int    `json:"log_keep_days"`
 	ScreenThumbs  bool   `json:"screen_thumbs"`
+	// LastOpened is when the client last reached the main screen; the daily
+	// digest shows on the first open of a calendar day.
+	LastOpened time.Time `json:"last_opened"`
 }
 
 func defaultPrefs() Prefs {
@@ -197,6 +200,18 @@ func (s *Store) SaveLogin(l Login) error {
 	l.SavedAt = time.Now().UTC()
 	return s.writeJSON(s.cfg("login.json"), l, 0o600)
 }
+// ForgetSession drops the session tokens but keeps what ties this machine
+// to the account as a device: the admin device token and device id. Signing
+// in again on the same machine is then still an approved admin device.
+func (s *Store) ForgetSession() error {
+	l, err := s.Login()
+	if err != nil || (l.AdminToken == "" && l.DeviceID == "") {
+		return s.ClearLogin()
+	}
+	keep := Login{AdminToken: l.AdminToken, DeviceID: l.DeviceID, Email: l.Email}
+	return s.SaveLogin(keep)
+}
+
 func (s *Store) ClearLogin() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

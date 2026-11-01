@@ -147,6 +147,15 @@ func (m *ui) viewUsername() string {
 // viewBoot is shown while the saved session is being resumed: the banner
 // reveals itself, the spinner turns and the current step is named.
 func (m *ui) viewBoot() string {
+	if m.locked {
+		return m.loginScreen(
+			m.th.Title.Render("locked"),
+			m.th.Dim.Render("enter your passkey to open pairdesk"),
+			"",
+			m.passkey.View(),
+			m.th.Dim.Render("enter continue · ctrl+c quit"),
+		)
+	}
 	if m.bootErr != "" {
 		return m.loginScreen(
 			m.th.Warn.Render("could not start: "+m.bootErr),
@@ -185,6 +194,23 @@ func (m *ui) onLoginKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	switch m.phase {
 	case app.PhaseBoot:
+		if m.locked {
+			if key == "enter" {
+				pw := m.passkey.Value()
+				m.passkey.Reset()
+				if err := m.applock.Unlock(pw); err != nil {
+					m.errLine = err.Error()
+					return m, nil
+				}
+				m.errLine = ""
+				m.locked = false
+				m.passkey.Blur()
+				return m, tea.Batch(m.runBoot(), m.spin.Tick)
+			}
+			var cmd tea.Cmd
+			m.passkey, cmd = m.passkey.Update(msg)
+			return m, cmd
+		}
 		switch {
 		case key == "q" && m.bootErr != "":
 			return m, m.quit()

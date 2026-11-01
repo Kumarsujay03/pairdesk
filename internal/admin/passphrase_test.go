@@ -33,3 +33,16 @@ func TestLock(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestRemoveNeedsThePassphrase(t *testing.T) {
+	l := NewLockAt(t.TempDir() + "/x.pass")
+	if err := l.Set("", "correct horse"); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.Remove("wrong"); err == nil {
+		t.Fatal("removed with the wrong passphrase")
+	}
+	if err := l.Remove("correct horse"); err != nil || l.IsSet() {
+		t.Fatalf("remove: %v set=%v", err, l.IsSet())
+	}
+}

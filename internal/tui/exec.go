@@ -74,6 +74,52 @@ func (m *ui) exec(c Command) tea.Cmd {
 		return m.say(helpFor(a.IsAdmin(), a.IsHelperOrAdmin())...)
 	case "quit":
 		return m.quit()
+	case "passkey":
+		if m.applock == nil {
+			return m.warn("not available in this build")
+		}
+		lock := m.applock
+		switch c.Arg(0) {
+		case "set":
+			ask := func(old string) tea.Cmd {
+				m.askMasked("new passkey (8+ characters)", func(pw string) tea.Cmd {
+					if err := lock.Set(old, pw); err != nil {
+						return m.warn(err.Error())
+					}
+					return m.say("passkey set; pairdesk will ask for it every time it starts. /passkey off removes it")
+				}, nil)
+				return nil
+			}
+			if lock.IsSet() {
+				m.askMasked("current passkey", ask, nil)
+				return nil
+			}
+			return ask("")
+		case "off":
+			if !lock.IsSet() {
+				return m.say("no passkey is set")
+			}
+			m.askMasked("current passkey", func(pw string) tea.Cmd {
+				if err := lock.Remove(pw); err != nil {
+					return m.warn(err.Error())
+				}
+				return m.say("passkey removed")
+			}, nil)
+			return nil
+		default:
+			state := "off"
+			if lock.IsSet() {
+				state = "on"
+			}
+			return m.say("start-up passkey: " + state + " (/passkey set|off)")
+		}
+	case "logout":
+		return m.run("", func(ctx context.Context) ([]string, error) {
+			if err := a.SignOut(ctx); err != nil {
+				return nil, err
+			}
+			return []string{"signed out on this device; start pairdesk again to log in. your identity key and admin device approval are kept"}, nil
+		})
 	case "add":
 		if c.Arg(0) == "" {
 			return m.usage(c)

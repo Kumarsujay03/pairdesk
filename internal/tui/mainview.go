@@ -563,9 +563,9 @@ func (m *ui) viewRight(height int) string {
 }
 
 func (m *ui) viewStatus() string {
-	left := " " + m.th.Online.Render("●") + " online  " + m.th.Offline.Render("○") + " offline  ·  tab panes  ·  ctrl+c quit  ·  /help"
+	left := " " + m.th.Online.Render("●") + " online " + m.th.Offline.Render("○") + " offline · tab panes · ctrl+c quit · /help"
 	if m.app.IsAdmin() {
-		left += "  ·  /users everyone"
+		left += " · /users everyone · " + m.th.Accent.Render("reg "+string(m.app.Settings().Registration))
 	}
 	right := ""
 	if m.status != "" {
@@ -588,7 +588,10 @@ func (m *ui) viewStatus() string {
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 1
 	if gap < 1 {
 		// Narrow terminal: keep the essentials so the bar stays one line.
-		left = " " + m.th.Online.Render("●") + " online  " + m.th.Offline.Render("○") + " offline  ·  /help"
+		left = " " + m.th.Online.Render("●") + " online " + m.th.Offline.Render("○") + " offline · /help"
+		if m.app.IsAdmin() {
+			left += " · " + m.th.Accent.Render("reg "+string(m.app.Settings().Registration))
+		}
 		gap = m.width - lipgloss.Width(left) - lipgloss.Width(right) - 1
 		if gap < 1 {
 			gap = 1
