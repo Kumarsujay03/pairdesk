@@ -89,8 +89,8 @@ var commands = map[string]cmdSpec{
 		"limits", "stats", "log", "devices", "groups", "badge", "inspect",
 		"unlock", "lock", "pass", "sessions", "revoke-all",
 	}, usage: "/admin <subcommand>", desc: "instance administration"},
-	"get": {usage: "/get <file-id>", desc: "download an offered file"},
-	"update":  {usage: "/update", desc: "install the latest release"},
+	"get":     {usage: "/get <file-id>", desc: "download an offered file"},
+	"update":  {usage: "/update [auto on|off]", desc: "install the latest release and restart; auto does it at start-up"},
 	"version": {usage: "/version", desc: "show the running version"},
 }
 
@@ -103,7 +103,7 @@ var subUsage = map[string]map[string]string{
 	"admin": {
 		"reg": "/admin reg open|closed|invite", "approve": "/admin approve on|off", "cap": "/admin cap <n>",
 		"invite": "/admin invite new [--uses n] [--expires 7d] | list | revoke <code>",
-		"kick": "/admin kick <user>", "mute": "/admin mute <user>", "unmute": "/admin unmute <user>",
+		"kick":   "/admin kick <user>", "mute": "/admin mute <user>", "unmute": "/admin unmute <user>",
 		"approve-user": "/admin approve-user <user>", "pending": "/admin pending", "helper": "/admin helper add|remove <user>",
 		"reset-key": "/admin reset-key <user>", "rename": "/admin rename <old> <new>", "announce": "/admin announce <text>",
 		"maintenance": "/admin maintenance on|off [msg]", "min-version": "/admin min-version <v>",

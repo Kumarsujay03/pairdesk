@@ -79,6 +79,10 @@ type Options struct {
 	// Unlocked is called once the start-up passkey has been entered, so the
 	// admin lock can stay open for the rest of the run.
 	Unlocked func()
+	// AutoUpdate, when set, runs on the boot screen before Boot. It reports
+	// progress lines and returns true when a newer release was installed;
+	// the UI then exits with ErrRestart so the caller can re-exec.
+	AutoUpdate func(ctx context.Context, progress func(string)) (bool, error)
 	// Boot, when set, is run in the background as soon as the screen is up
 	// (normally app.Resume). The boot screen shows its progress; the app's
 	// phase events take over once it finishes.
@@ -99,12 +103,21 @@ func RunWith(ctx context.Context, a *app.App, o Options) error {
 	if o.ProgramReady != nil {
 		o.ProgramReady(p)
 	}
-	_, err := p.Run()
+	final, err := p.Run()
 	if errors.Is(err, tea.ErrProgramKilled) && ctx.Err() != nil {
 		return nil
 	}
+	if err == nil {
+		if fm, ok := final.(*ui); ok && fm.restart {
+			return ErrRestart
+		}
+	}
 	return err
 }
+
+// ErrRestart is returned by RunWith after a release was installed: the
+// caller should re-exec the (now replaced) binary.
+var ErrRestart = errors.New("restart into the new release")
 
 // --- messages ---------------------------------------------------------------
 
@@ -112,7 +125,26 @@ type evMsg struct{ app.Event }
 type animTickMsg time.Time
 type slowTickMsg time.Time
 type updateMsg struct{ tag string }
-type bootDoneMsg struct{ err error }
+type bootDoneMsg struct {
+	err     error
+	restart bool // a release was installed; exit and re-exec
+}
+
+// bootStepMsg carries one progress line from the boot goroutine.
+type bootStepMsg struct {
+	text string
+	ch   <-chan tea.Msg
+}
+
+// updateProgressMsg / updateDoneMsg stream /update into the chat.
+type updateProgressMsg struct {
+	text string
+	ch   <-chan tea.Msg
+}
+type updateDoneMsg struct {
+	tag string
+	err error
+}
 type updateTickMsg struct{}
 type bannerTickMsg struct{}
 type debounceMsg struct{ seq int }
@@ -228,6 +260,9 @@ type ui struct {
 	boot         func(ctx context.Context) error
 	applock      *admin.Lock
 	unlocked     func()
+	autoUpdate   func(ctx context.Context, progress func(string)) (bool, error)
+	restart      bool            // quit, then re-exec: a release was installed
+	updNote      int             // index of the in-place /update progress note, -1 when none
 	locked       bool            // waiting for the start-up passkey
 	passkey      textinput.Model // start-up passkey prompt
 	bootStep     string          // what startup is doing right now
@@ -286,6 +321,8 @@ func newModel(ctx context.Context, a *app.App, o Options) *ui {
 		boot:         o.Boot,
 		applock:      o.AppLock,
 		unlocked:     o.Unlocked,
+		autoUpdate:   o.AutoUpdate,
+		updNote:      -1,
 		demo:         o.Demo,
 		reduced:      prefs.ReducedMotion || o.ReducedMotion,
 		width:        80,
@@ -401,8 +438,36 @@ func (m *ui) runBoot() tea.Cmd {
 	}
 	m.bootErr = ""
 	m.bootStep = "starting"
-	boot, ctx := m.boot, m.ctx
-	return func() tea.Msg { return bootDoneMsg{err: boot(ctx)} }
+	boot, auto, ctx := m.boot, m.autoUpdate, m.ctx
+	ch := make(chan tea.Msg, 16)
+	go func() {
+		defer close(ch)
+		if auto != nil {
+			done, err := auto(ctx, func(s string) {
+				select {
+				case ch <- bootStepMsg{text: s, ch: ch}:
+				case <-ctx.Done():
+				}
+			})
+			if err == nil && done {
+				ch <- bootDoneMsg{restart: true}
+				return
+			}
+		}
+		ch <- bootDoneMsg{err: boot(ctx)}
+	}()
+	return waitMsg(ch)
+}
+
+// waitMsg delivers the next message from ch, or nothing once it closes.
+func waitMsg(ch <-chan tea.Msg) tea.Cmd {
+	return func() tea.Msg {
+		msg, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return msg
+	}
 }
 
 // waitEvent pumps one app event into the program.
@@ -477,19 +542,7 @@ func parseVersion(v string) ([3]int, bool) {
 }
 
 // newerVersion reports whether tag is a release newer than cur.
-func newerVersion(tag, cur string) bool {
-	a, ok1 := parseVersion(tag)
-	b, ok2 := parseVersion(cur)
-	if !ok1 || !ok2 {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return a[i] > b[i]
-		}
-	}
-	return false
-}
+func newerVersion(tag, cur string) bool { return update.Newer(tag, cur) }
 
 func (m *ui) slowTick() tea.Cmd {
 	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg { return slowTickMsg(t) })
@@ -546,15 +599,39 @@ func (m *ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tickPending = false
 		m.stepAnimations()
 		return m, m.animTick()
+	case bootStepMsg:
+		m.bootStep = msg.text
+		return m, waitMsg(msg.ch)
 	case bootDoneMsg:
+		if msg.restart {
+			m.bootStep = "restarting into the new release"
+			m.restart = true
+			return m, m.quit()
+		}
 		if msg.err != nil {
 			m.bootErr = msg.err.Error()
 		}
 		return m, nil
+	case updateProgressMsg:
+		m.setUpdateNote(msg.text, false)
+		return m, waitMsg(msg.ch)
+	case updateDoneMsg:
+		switch {
+		case msg.err != nil && msg.err.Error() == "already up to date":
+			m.setUpdateNote("already up to date ("+msg.tag+")", false)
+		case msg.err != nil:
+			m.setUpdateNote("update failed: "+msg.err.Error(), true)
+		default:
+			m.setUpdateNote("installed "+msg.tag+", restarting", false)
+			m.restart = true
+			return m, m.quit()
+		}
+		m.updNote = -1 // the line is final; the next /update starts a new one
+		return m, nil
 	case updateMsg:
 		if msg.tag != "" && msg.tag != m.latest {
 			m.latest = msg.tag
-			m.addNote("", "pairdesk "+msg.tag+" is available: run /update, then restart", false)
+			m.addNote("", "pairdesk "+msg.tag+" is available: run /update (it restarts by itself)", false)
 			m.renderChat(true)
 		}
 		return m, updateTick()
@@ -987,6 +1064,19 @@ func (m *ui) addNote(conv, text string, warn bool) {
 	if len(m.notes) > 500 {
 		m.notes = m.notes[len(m.notes)-500:]
 	}
+}
+
+// setUpdateNote rewrites the /update progress line in place, adding it on
+// first use, so the chat shows one moving line rather than a flood.
+func (m *ui) setUpdateNote(text string, warn bool) {
+	if m.updNote >= 0 && m.updNote < len(m.notes) && m.notes[m.updNote].Conv == m.active {
+		m.notes[m.updNote].Text = text
+		m.notes[m.updNote].Warn = warn
+	} else {
+		m.addNote("", text, warn)
+		m.updNote = len(m.notes) - 1
+	}
+	m.renderChat(true)
 }
 
 func (m *ui) setStatus(text string, warn bool) {

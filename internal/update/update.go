@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -29,6 +30,43 @@ type release struct {
 		URL  string `json:"browser_download_url"`
 		Size int64  `json:"size"`
 	} `json:"assets"`
+}
+
+// IsRelease reports whether v is a stamped release version (1.2.3), as
+// opposed to a dev build or commit hash.
+func IsRelease(v string) bool { _, ok := parseVersion(v); return ok }
+
+// Newer reports whether tag is a higher semver release than cur. Anything
+// that is not a plain 1.2.3 (dev builds, commit hashes) is never "newer".
+func Newer(tag, cur string) bool {
+	a, ok1 := parseVersion(tag)
+	b, ok2 := parseVersion(cur)
+	if !ok1 || !ok2 {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return a[i] > b[i]
+		}
+	}
+	return false
+}
+
+func parseVersion(v string) ([3]int, bool) {
+	var out [3]int
+	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	parts := strings.SplitN(v, ".", 3)
+	if len(parts) != 3 {
+		return out, false
+	}
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return out, false
+		}
+		out[i] = n
+	}
+	return out, true
 }
 
 // Latest returns the newest release tag.
@@ -126,11 +164,18 @@ func Apply(ctx context.Context, current string, progress func(string)) (string, 
 		return "", fmt.Errorf("no release asset for %s/%s", runtime.GOOS, runtime.GOARCH)
 	}
 	progress("downloading " + r.TagName)
-	data, err := get(ctx, binURL, 200<<20)
+	data, err := get(ctx, binURL, 200<<20, func(done, total int64) {
+		if total > 0 {
+			progress(fmt.Sprintf("downloading %s  %3d%%  %.1f/%.1f MB", r.TagName, done*100/total, float64(done)/1e6, float64(total)/1e6))
+		} else {
+			progress(fmt.Sprintf("downloading %s  %.1f MB", r.TagName, float64(done)/1e6))
+		}
+	})
 	if err != nil {
 		return "", err
 	}
-	sums, err := get(ctx, sumURL, 1<<20)
+	progress("verifying checksum")
+	sums, err := get(ctx, sumURL, 1<<20, nil)
 	if err != nil {
 		return "", err
 	}
@@ -160,7 +205,9 @@ func Apply(ctx context.Context, current string, progress func(string)) (string, 
 	return r.TagName, nil
 }
 
-func get(ctx context.Context, url string, limit int64) ([]byte, error) {
+// get downloads url (at most limit bytes), reporting progress at most a
+// few times a second.
+func get(ctx context.Context, url string, limit int64, onProgress func(done, total int64)) ([]byte, error) {
 	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 	req.Header.Set("User-Agent", "pairdesk-updater")
 	resp, err := (&http.Client{Timeout: 5 * time.Minute}).Do(req)
@@ -171,7 +218,28 @@ func get(ctx context.Context, url string, limit int64) ([]byte, error) {
 	if resp.StatusCode != 200 {
 		return nil, fmt.Errorf("download: %s", resp.Status)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, limit))
+	if onProgress == nil {
+		return io.ReadAll(io.LimitReader(resp.Body, limit))
+	}
+	total := resp.ContentLength
+	var buf []byte
+	chunk := make([]byte, 64<<10)
+	last := time.Time{}
+	rd := io.LimitReader(resp.Body, limit)
+	for {
+		n, err := rd.Read(chunk)
+		buf = append(buf, chunk[:n]...)
+		if now := time.Now(); now.Sub(last) > 200*time.Millisecond || err != nil {
+			onProgress(int64(len(buf)), total)
+			last = now
+		}
+		if err == io.EOF {
+			return buf, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
 }
 
 func checksumMatches(sums, name, hexsum string) bool {

@@ -32,7 +32,7 @@ Full design: [PAIRDESK.md](PAIRDESK.md). Backend setup: [supabase/README.md](sup
 | `/admin pending` `/admin approve-user <user>` `/admin …` | approval queue and instance controls (admin only), see `/help` |
 
 Type `/` and a suggestion strip lists what you can run; `up`/`down` pick, `enter` runs or fills in, `tab` completes and cycles. With the strip closed, `up`/`down` scroll the chat. Admin and helper
-commands are only suggested to those roles. `/update` installs the latest release in place; the status bar shows the running version and says when a newer one exists.
+commands are only suggested to those roles. New releases install themselves when PairDesk starts (progress on the boot screen, then an automatic restart; `/update auto off` disables it), and `/update` does the same on demand, showing download progress in the chat. The status bar shows the running version.
 `ctrl+c` or `/quit` exits. `ctrl+k` ends any live session on your machine.
 
 ## Verifying a release

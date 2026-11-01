@@ -1,9 +1,9 @@
 package tui
 
 import (
-	"github.com/Kumarsujay03/pairdesk/internal/admin"
 	"context"
 	"errors"
+	"github.com/Kumarsujay03/pairdesk/internal/admin"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -524,5 +524,95 @@ func runCmds(t *testing.T, cmd tea.Cmd, booted chan struct{}) {
 	case <-booted:
 	case <-time.After(3 * time.Second):
 		t.Fatal("boot never ran after unlocking")
+	}
+}
+
+func TestUpdateStreamsProgressThenRestarts(t *testing.T) {
+	mem := memory.New()
+	m := newTestUI(t, newTestApp(t, mem, "sujay03"))
+	ch := make(chan tea.Msg, 4)
+	m.setUpdateNote("checking for the latest release", false)
+	first := m.updNote
+	m.Update(updateProgressMsg{text: "downloading v9.9.9   40%  2.0/5.0 MB", ch: ch})
+	m.Update(updateProgressMsg{text: "downloading v9.9.9   80%  4.0/5.0 MB", ch: ch})
+	v := m.View()
+	if strings.Contains(v, "40%") || !strings.Contains(v, "80%") {
+		t.Fatalf("progress should be rewritten in place:\n%s", v)
+	}
+	if m.updNote != first {
+		t.Fatal("progress note moved")
+	}
+	m.Update(updateDoneMsg{tag: "v9.9.9"})
+	if !m.restart {
+		t.Fatal("a successful update must restart")
+	}
+	if v := m.View(); !strings.Contains(v, "installed v9.9.9, restarting") {
+		t.Fatalf("final line missing:\n%s", v)
+	}
+
+	m2 := newTestUI(t, newTestApp(t, mem, "other"))
+	m2.setUpdateNote("x", false)
+	m2.Update(updateDoneMsg{tag: "v0.0.1", err: errors.New("already up to date")})
+	if m2.restart || m2.updNote != -1 {
+		t.Fatal("up to date must not restart and must free the note")
+	}
+	if v := m2.View(); !strings.Contains(v, "already up to date (v0.0.1)") {
+		t.Fatalf("up-to-date line missing:\n%s", v)
+	}
+}
+
+func TestUpdateAutoToggle(t *testing.T) {
+	mem := memory.New()
+	a := newTestApp(t, mem, "sujay03")
+	m := newTestUI(t, a)
+	if !a.AutoUpdateOn() {
+		t.Fatal("auto-update should default on")
+	}
+	c, _ := Parse("/update auto off")
+	m.exec(c)
+	if a.AutoUpdateOn() {
+		t.Fatal("/update auto off did not stick")
+	}
+	c, _ = Parse("/update auto")
+	m.exec(c)
+	if v := m.View(); !strings.Contains(v, "auto-update at start-up: off") {
+		t.Fatalf("state line missing:\n%s", v)
+	}
+}
+
+func TestBootAutoUpdateRestarts(t *testing.T) {
+	mem := memory.New()
+	ready := newTestApp(t, mem, "sujay03")
+	a2 := app.New(app.Options{Backend: mem.Client(), Store: ready.Store()})
+	if err := a2.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(a2.Close)
+	booted := false
+	m := newModel(context.Background(), a2, Options{
+		Version: "test",
+		Boot:    func(context.Context) error { booted = true; return nil },
+		AutoUpdate: func(_ context.Context, progress func(string)) (bool, error) {
+			progress("downloading v9.9.9   50%")
+			return true, nil
+		},
+	})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	cmd := m.runBoot()
+	var msg tea.Msg
+	for i := 0; i < 5 && cmd != nil; i++ {
+		msg = cmd()
+		if msg == nil {
+			break
+		}
+		_, cmd = m.Update(msg)
+		if _, ok := msg.(bootStepMsg); ok {
+			if v := m.View(); !strings.Contains(v, "downloading v9.9.9") {
+				t.Fatalf("boot screen should show update progress:\n%s", v)
+			}
+		}
+	}
+	if !m.restart || booted {
+		t.Fatalf("auto-update should restart before Boot runs (restart=%v booted=%v)", m.restart, booted)
 	}
 }

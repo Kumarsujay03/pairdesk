@@ -74,6 +74,8 @@ type Prefs struct {
 	ShowBadge     bool   `json:"show_badge"`
 	LogKeepDays   int    `json:"log_keep_days"`
 	ScreenThumbs  bool   `json:"screen_thumbs"`
+	// NoAutoUpdate turns off installing new releases at start-up (on by default).
+	NoAutoUpdate bool `json:"no_auto_update,omitempty"`
 	// LastOpened is when the client last reached the main screen; the daily
 	// digest shows on the first open of a calendar day.
 	LastOpened time.Time `json:"last_opened"`
@@ -200,6 +202,7 @@ func (s *Store) SaveLogin(l Login) error {
 	l.SavedAt = time.Now().UTC()
 	return s.writeJSON(s.cfg("login.json"), l, 0o600)
 }
+
 // ForgetSession drops the session tokens but keeps what ties this machine
 // to the account as a device: the admin device token and device id. Signing
 // in again on the same machine is then still an approved admin device.

@@ -3,6 +3,18 @@
 All notable changes to PairDesk. The section for a tag becomes that release's notes on GitHub.
 Format: [Keep a Changelog](https://keepachangelog.com), versions follow semver.
 
+## [0.1.11] - 2026-11-01
+
+### Added
+- Auto-update at start-up: when a newer release exists, the boot screen downloads it with a
+  percentage, installs it and restarts into it. `/update auto off` turns this off,
+  `PAIRDESK_NO_AUTOUPDATE=1` too.
+
+### Changed
+- `/update` shows live progress (checking, download percentage, checksum) on one line in the
+  chat and restarts PairDesk by itself once the new release is installed. `--update` on the
+  command line shows the same moving percentage.
+
 ## [0.1.10] - 2026-11-01
 
 ### Fixed

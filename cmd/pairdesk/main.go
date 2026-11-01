@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -10,7 +11,9 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/Kumarsujay03/pairdesk/internal/admin"
 	"github.com/Kumarsujay03/pairdesk/internal/app"
@@ -41,7 +44,13 @@ func main() {
 		return
 	}
 	if *doUpdate {
-		tag, err := update.Apply(context.Background(), version, func(s string) { fmt.Println("•", s) })
+		tag, err := update.Apply(context.Background(), version, func(s string) {
+			if strings.HasPrefix(s, "downloading") {
+				fmt.Printf("\r• %-60s", s) // one moving line for the percentage
+				return
+			}
+			fmt.Println("\n•", s)
+		})
 		if err != nil {
 			fmt.Println("update:", err)
 			if tag != "" {
@@ -54,7 +63,23 @@ func main() {
 	}
 	app.Version = version
 
-	if err := run(*demo, *reduced); err != nil {
+	// Resolve our path now: once an update has renamed a new file over us,
+	// /proc/self/exe reads "… (deleted)" and could not be exec'd.
+	exe, exeErr := os.Executable()
+	if exeErr == nil {
+		exe, _ = filepath.EvalSymlinks(exe)
+	}
+	err := run(*demo, *reduced)
+	if errors.Is(err, tui.ErrRestart) {
+		// A release was installed: become the new binary with the same arguments.
+		e := exeErr
+		if e == nil {
+			e = syscall.Exec(exe, os.Args, os.Environ())
+		}
+		fmt.Fprintln(os.Stderr, "pairdesk: updated, but could not restart:", e, "- start pairdesk again")
+		os.Exit(1)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "pairdesk:", err)
 		os.Exit(1)
 	}
@@ -110,7 +135,37 @@ func run(demo, reduced bool) error {
 	applock := admin.NewLockAt(filepath.Join(paths.Config, "app.pass"))
 	applock.MinLen = 4 // guards this terminal only; guesses are rate limited
 	hooks, ready := wire(a, lock)
-	return tui.RunWith(ctx, a, tui.Options{Version: version, Demo: demo, ReducedMotion: reduced, Hooks: hooks, ProgramReady: ready, Boot: a.Resume, AppLock: applock, Unlocked: lock.Trust})
+	var auto func(ctx context.Context, progress func(string)) (bool, error)
+	if !demo && os.Getenv("PAIRDESK_NO_AUTOUPDATE") == "" {
+		auto = func(ctx context.Context, progress func(string)) (bool, error) {
+			return autoUpdate(ctx, a, logger, progress)
+		}
+	}
+	return tui.RunWith(ctx, a, tui.Options{Version: version, Demo: demo, ReducedMotion: reduced, Hooks: hooks, ProgramReady: ready, Boot: a.Resume, AppLock: applock, Unlocked: lock.Trust, AutoUpdate: auto})
+}
+
+// autoUpdate installs a newer release at start-up when the user has not
+// turned that off. It never blocks start-up on a bad network: a slow or
+// failed check just means starting the current version.
+func autoUpdate(ctx context.Context, a *app.App, logger *slog.Logger, progress func(string)) (bool, error) {
+	if !a.AutoUpdateOn() || !update.IsRelease(version) {
+		return false, nil
+	}
+	progress("checking for updates")
+	cctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	tag, err := update.Latest(cctx)
+	cancel()
+	if err != nil || !update.Newer(tag, version) {
+		return false, nil
+	}
+	cctx, cancel = context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	if _, err := update.Apply(cctx, version, progress); err != nil {
+		logger.Warn("auto-update failed", "tag", tag, "err", err)
+		return false, nil
+	}
+	logger.Info("auto-updated", "from", version, "to", tag)
+	return true, nil
 }
 
 // openLog writes slog output to <state>/pairdesk.log so the terminal stays

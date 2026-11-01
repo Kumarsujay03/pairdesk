@@ -56,6 +56,16 @@ func (a *App) SetNotifications(on bool) error {
 	return a.st.SavePrefs(p)
 }
 
+// AutoUpdateOn reports whether new releases install themselves at start-up.
+func (a *App) AutoUpdateOn() bool { return !a.st.Prefs().NoAutoUpdate }
+
+// SetAutoUpdate toggles start-up auto-update.
+func (a *App) SetAutoUpdate(on bool) error {
+	p := a.st.Prefs()
+	p.NoAutoUpdate = !on
+	return a.st.SavePrefs(p)
+}
+
 func (a *App) index(m Msg) {
 	if a.search == nil || !m.Decrypted {
 		return

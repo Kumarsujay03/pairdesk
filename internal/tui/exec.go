@@ -60,16 +60,45 @@ func (m *ui) exec(c Command) tea.Cmd {
 	case "version":
 		return m.say("pairdesk " + m.version)
 	case "update":
-		return m.run("", func(ctx context.Context) ([]string, error) {
-			tag, err := update.Apply(ctx, m.version, nil)
-			if err != nil {
-				if err.Error() == "already up to date" {
-					return []string{"already up to date (" + tag + ")"}, nil
+		if c.Arg(0) == "auto" {
+			if c.Arg(1) == "" {
+				state := "off"
+				if a.AutoUpdateOn() {
+					state = "on"
 				}
-				return nil, err
+				return m.say("auto-update at start-up: " + state + " (/update auto on|off)")
 			}
-			return []string{"installed " + tag + ". quit and start pairdesk again to use it."}, nil
-		})
+			on, err := onOff(c.Arg(1))
+			if err != nil {
+				return m.usage(c)
+			}
+			if err := a.SetAutoUpdate(on); err != nil {
+				return m.warn(err.Error())
+			}
+			if on {
+				return m.say("auto-update on: new releases install themselves when pairdesk starts")
+			}
+			return m.say("auto-update off: run /update yourself")
+		}
+		if m.updNote >= 0 {
+			return m.warn("an update is already running")
+		}
+		m.setUpdateNote("checking for the latest release", false)
+		ctx, cur := m.ctx, m.version
+		ch := make(chan tea.Msg, 16)
+		go func() {
+			defer close(ch)
+			cctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+			defer cancel()
+			tag, err := update.Apply(cctx, cur, func(s string) {
+				select {
+				case ch <- updateProgressMsg{text: s, ch: ch}:
+				case <-cctx.Done():
+				}
+			})
+			ch <- updateDoneMsg{tag: tag, err: err}
+		}()
+		return waitMsg(ch)
 	case "help":
 		return m.say(helpFor(a.IsAdmin(), a.IsHelperOrAdmin())...)
 	case "quit":
