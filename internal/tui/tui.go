@@ -4,6 +4,8 @@
 package tui
 
 import (
+	"github.com/Kumarsujay03/pairdesk/internal/update"
+	"strconv"
 	"context"
 	"errors"
 	"fmt"
@@ -98,6 +100,8 @@ func RunWith(ctx context.Context, a *app.App, o Options) error {
 type evMsg struct{ app.Event }
 type animTickMsg time.Time
 type slowTickMsg time.Time
+type updateMsg struct{ tag string }
+type updateTickMsg struct{}
 type bannerTickMsg struct{}
 type debounceMsg struct{ seq int }
 type availMsg struct {
@@ -208,6 +212,7 @@ type ui struct {
 	sugs         []Suggestion // completion strip above the input
 	sugIdx       int
 	sugBase      string // line that started a tab-completion cycle
+	latest       string // newer release tag, when one is known
 	announcement string
 	notes        []note
 	pending      []pendingMsg
@@ -339,6 +344,9 @@ func (m *ui) focusForPhase() {
 
 func (m *ui) Init() tea.Cmd {
 	cmds := []tea.Cmd{m.waitEvent(), textinput.Blink, m.slowTick()}
+	if cmd := m.checkUpdate(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	if m.bannerShown < len(bannerLines) {
 		cmds = append(cmds, bannerTick())
 	}
@@ -370,6 +378,71 @@ func (m *ui) waitEvent() tea.Cmd {
 
 func bannerTick() tea.Cmd {
 	return tea.Tick(30*time.Millisecond, func(time.Time) tea.Msg { return bannerTickMsg{} })
+}
+
+// updateCheckEvery is how often a running client looks for a newer release.
+const updateCheckEvery = 6 * time.Hour
+
+// checkUpdate asks GitHub for the latest release tag in the background. It
+// is skipped for development builds (no release version stamped) and in
+// demo mode, so tests and offline demos never touch the network.
+func (m *ui) checkUpdate() tea.Cmd {
+	if m.demo || !releaseVersion(m.version) {
+		return nil
+	}
+	cur := m.version
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		tag, err := update.Latest(ctx)
+		if err != nil || !newerVersion(tag, cur) {
+			return updateMsg{}
+		}
+		return updateMsg{tag: tag}
+	}
+}
+
+func updateTick() tea.Cmd {
+	return tea.Tick(updateCheckEvery, func(time.Time) tea.Msg { return updateTickMsg{} })
+}
+
+// releaseVersion reports whether v looks like a stamped release (1.2.3),
+// as opposed to a dev build or commit hash.
+func releaseVersion(v string) bool {
+	_, ok := parseVersion(v)
+	return ok
+}
+
+func parseVersion(v string) ([3]int, bool) {
+	var out [3]int
+	v = strings.TrimPrefix(strings.TrimSpace(v), "v")
+	parts := strings.SplitN(v, ".", 3)
+	if len(parts) != 3 {
+		return out, false
+	}
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return out, false
+		}
+		out[i] = n
+	}
+	return out, true
+}
+
+// newerVersion reports whether tag is a release newer than cur.
+func newerVersion(tag, cur string) bool {
+	a, ok1 := parseVersion(tag)
+	b, ok2 := parseVersion(cur)
+	if !ok1 || !ok2 {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return a[i] > b[i]
+		}
+	}
+	return false
 }
 
 func (m *ui) slowTick() tea.Cmd {
@@ -427,6 +500,15 @@ func (m *ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tickPending = false
 		m.stepAnimations()
 		return m, m.animTick()
+	case updateMsg:
+		if msg.tag != "" && msg.tag != m.latest {
+			m.latest = msg.tag
+			m.addNote("", "pairdesk "+msg.tag+" is available: run /update, then restart", false)
+			m.renderChat(true)
+		}
+		return m, updateTick()
+	case updateTickMsg:
+		return m, m.checkUpdate()
 	case slowTickMsg:
 		m.typingFrame++
 		if m.phase == app.PhaseReady && m.active != "" {

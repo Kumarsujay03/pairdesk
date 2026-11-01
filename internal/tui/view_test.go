@@ -346,3 +346,31 @@ func TestSuggestionKeysKeepInputVisible(t *testing.T) {
 		t.Fatalf("/friends did not run:\n%s", v)
 	}
 }
+
+func TestVersionInStatusBarAndUpdateNotice(t *testing.T) {
+	mem := memory.New()
+	admin := newTestApp(t, mem, "sujay03")
+	m := newTestUI(t, admin)
+	if v := m.View(); !strings.Contains(v, "vtest") {
+		t.Fatalf("version missing from status bar:\n%s", v)
+	}
+	if m.checkUpdate() != nil {
+		t.Fatal("dev/test builds must not check GitHub")
+	}
+	m.Update(updateMsg{tag: "v9.9.9"})
+	v := m.View()
+	if !strings.Contains(v, "v9.9.9 available · /update") {
+		t.Fatalf("update notice missing from status bar:\n%s", v)
+	}
+	if !strings.Contains(v, "run /update") {
+		t.Fatalf("update note missing from chat:\n%s", v)
+	}
+	for _, c := range []struct {
+		tag, cur string
+		want     bool
+	}{{"v0.1.4", "0.1.3", true}, {"v0.1.3", "0.1.3", false}, {"v0.1.2", "0.1.3", false}, {"v1.0.0", "0.9.9", true}, {"v0.1.4", "abc1234", false}} {
+		if got := newerVersion(c.tag, c.cur); got != c.want {
+			t.Errorf("newerVersion(%q,%q)=%v", c.tag, c.cur, got)
+		}
+	}
+}

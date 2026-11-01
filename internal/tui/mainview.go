@@ -570,12 +570,23 @@ func (m *ui) viewStatus() string {
 		}
 	} else if m.disconnected {
 		right = m.th.Warn.Render("offline")
+	} else if m.latest != "" {
+		right = m.th.Warn.Render(m.latest + " available · /update")
 	} else {
-		right = m.th.Dim.Render(m.app.Me().Username + " · " + m.th.Name)
+		ver := "v" + strings.TrimPrefix(m.version, "v")
+		right = m.th.Dim.Render(m.app.Me().Username + " · " + m.th.Name + " · " + ver)
+		if m.width-lipgloss.Width(left)-lipgloss.Width(right)-1 < 1 {
+			right = m.th.Dim.Render(m.app.Me().Username + " · " + ver)
+		}
 	}
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(right) - 1
 	if gap < 1 {
-		gap = 1
+		// Narrow terminal: keep the essentials so the bar stays one line.
+		left = " " + m.th.Online.Render("●") + " online  " + m.th.Offline.Render("○") + " offline  ·  /help"
+		gap = m.width - lipgloss.Width(left) - lipgloss.Width(right) - 1
+		if gap < 1 {
+			gap = 1
+		}
 	}
 	return m.th.StatusBar.Width(m.width).Render(left + strings.Repeat(" ", gap) + right)
 }

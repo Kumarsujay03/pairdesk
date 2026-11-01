@@ -3,6 +3,17 @@
 All notable changes to PairDesk. The section for a tag becomes that release's notes on GitHub.
 Format: [Keep a Changelog](https://keepachangelog.com), versions follow semver.
 
+## [0.1.4] - 2026-11-01
+
+### Added
+- The status bar shows the running version. The client checks GitHub for a newer release on
+  start and every six hours; when one exists the bar says `vX.Y.Z available · /update` and a
+  note appears in the chat. Dev builds and demo mode never check.
+
+### Changed
+- On narrow terminals the status bar drops the theme name, then the key hints, instead of
+  wrapping onto a second line.
+
 ## [0.1.3] - 2026-11-01
 
 ### Added
@@ -59,6 +70,7 @@ First release.
 - Peer-to-peer file drop, shared terminal, desktop notifications, self-updater, one-line installer.
 - Supabase (free tier) as rendezvous with Row Level Security and server-side functions.
 
+[0.1.4]: https://github.com/Kumarsujay03/pairdesk/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Kumarsujay03/pairdesk/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Kumarsujay03/pairdesk/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Kumarsujay03/pairdesk/compare/v0.1.0...v0.1.1
