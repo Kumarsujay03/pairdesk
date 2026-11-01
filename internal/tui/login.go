@@ -144,6 +144,25 @@ func (m *ui) viewUsername() string {
 	return m.loginScreen(lines...)
 }
 
+// viewBoot is shown while the saved session is being resumed: the banner
+// reveals itself, the spinner turns and the current step is named.
+func (m *ui) viewBoot() string {
+	if m.bootErr != "" {
+		return m.loginScreen(
+			m.th.Warn.Render("could not start: "+m.bootErr),
+			m.th.Dim.Render("r retry · q quit"),
+		)
+	}
+	step := m.bootStep
+	if step == "" {
+		step = "starting"
+	}
+	return m.loginScreen(
+		m.spin.View()+" "+m.th.Text.Render(step+"…"),
+		m.th.Dim.Render("ctrl+c quit"),
+	)
+}
+
 func (m *ui) viewPending() string {
 	return m.loginScreen(
 		m.spin.View()+" "+m.th.Text.Render("waiting for the admin to let you in"),
@@ -165,6 +184,14 @@ func (m *ui) viewWall(title, body, keys string) string {
 func (m *ui) onLoginKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 	switch m.phase {
+	case app.PhaseBoot:
+		switch {
+		case key == "q" && m.bootErr != "":
+			return m, m.quit()
+		case key == "r" && m.bootErr != "":
+			return m, tea.Batch(m.runBoot(), m.spin.Tick)
+		}
+		return m, nil
 	case app.PhaseNeedLogin:
 		if key == "enter" && !m.busy {
 			email := strings.TrimSpace(m.email.Value())

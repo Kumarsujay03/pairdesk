@@ -277,6 +277,10 @@ func newFake(t *testing.T) (*fake, *httptest.Server) {
 			"grantee_pubkey": "GPK", "signature": `\xdeadbeef`, "created_at": "2026-01-01T00:00:00Z",
 			"revoked_at": nil}})
 	})
+	mux.HandleFunc("/rest/v1/rpc/is_admin", func(w http.ResponseWriter, r *http.Request) {
+		rec := f.record(r)
+		writeJSON(w, 200, rec.Header.Get("x-pairdesk-admin-token") == "adm-1")
+	})
 	mux.HandleFunc("/rest/v1/rpc/send_signal", func(w http.ResponseWriter, r *http.Request) {
 		f.record(r)
 		writeJSON(w, 200, 1)
@@ -438,6 +442,16 @@ func TestHeaders(t *testing.T) {
 	if h := f.last("/rest/v1/rpc/me_detail").Header.Get("x-pairdesk-admin-token"); h != "" {
 		t.Errorf("admin token still sent: %q", h)
 	}
+	// The server decides whether the token it is sent is still valid.
+	c.SetAdminToken("adm-1")
+	if ok, err := c.AdminTokenValid(ctx); err != nil || !ok {
+		t.Fatalf("valid token rejected: %v %v", ok, err)
+	}
+	c.SetAdminToken("stale")
+	if ok, err := c.AdminTokenValid(ctx); err != nil || ok {
+		t.Fatalf("stale token accepted: %v %v", ok, err)
+	}
+	c.SetAdminToken("")
 	// Bootstrap installs the token it gets back.
 	tok, err := c.BootstrapAdminDevice(ctx, "dev1", "PK")
 	if err != nil || tok != "devtoken" {

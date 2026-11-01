@@ -72,6 +72,10 @@ type Options struct {
 	// ProgramReady is called with the running program so the session layer
 	// can release and restore the terminal around a raw session.
 	ProgramReady func(p *tea.Program)
+	// Boot, when set, is run in the background as soon as the screen is up
+	// (normally app.Resume). The boot screen shows its progress; the app's
+	// phase events take over once it finishes.
+	Boot func(ctx context.Context) error
 }
 
 // Run builds the UI, starts the Bubble Tea program in the alternate screen
@@ -101,6 +105,7 @@ type evMsg struct{ app.Event }
 type animTickMsg time.Time
 type slowTickMsg time.Time
 type updateMsg struct{ tag string }
+type bootDoneMsg struct{ err error }
 type updateTickMsg struct{}
 type bannerTickMsg struct{}
 type debounceMsg struct{ seq int }
@@ -213,6 +218,9 @@ type ui struct {
 	sugIdx       int
 	sugBase      string // line that started a tab-completion cycle
 	latest       string // newer release tag, when one is known
+	boot         func(ctx context.Context) error
+	bootStep     string // what startup is doing right now
+	bootErr      string // startup failure, shown with a retry hint
 	announcement string
 	notes        []note
 	pending      []pendingMsg
@@ -264,6 +272,7 @@ func newModel(ctx context.Context, a *app.App, o Options) *ui {
 		hooks:   o.Hooks,
 		th:      th,
 		version: o.Version,
+		boot:    o.Boot,
 		demo:    o.Demo,
 		reduced: prefs.ReducedMotion || o.ReducedMotion,
 		width:   80,
@@ -350,13 +359,27 @@ func (m *ui) Init() tea.Cmd {
 	if m.bannerShown < len(bannerLines) {
 		cmds = append(cmds, bannerTick())
 	}
-	if m.phase == app.PhasePendingApproval {
+	if m.phase == app.PhasePendingApproval || m.phase == app.PhaseBoot {
 		cmds = append(cmds, m.spin.Tick)
 	}
 	if m.phase == app.PhaseReady {
 		cmds = append(cmds, m.enterReady())
 	}
+	if cmd := m.runBoot(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
 	return tea.Batch(cmds...)
+}
+
+// runBoot starts the background startup work, if any was configured.
+func (m *ui) runBoot() tea.Cmd {
+	if m.boot == nil || m.phase != app.PhaseBoot {
+		return nil
+	}
+	m.bootErr = ""
+	m.bootStep = "starting"
+	boot, ctx := m.boot, m.ctx
+	return func() tea.Msg { return bootDoneMsg{err: boot(ctx)} }
 }
 
 // waitEvent pumps one app event into the program.
@@ -500,6 +523,11 @@ func (m *ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tickPending = false
 		m.stepAnimations()
 		return m, m.animTick()
+	case bootDoneMsg:
+		if msg.err != nil {
+			m.bootErr = msg.err.Error()
+		}
+		return m, nil
 	case updateMsg:
 		if msg.tag != "" && msg.tag != m.latest {
 			m.latest = msg.tag
@@ -525,7 +553,7 @@ func (m *ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
-		if m.phase == app.PhasePendingApproval || m.busy {
+		if m.phase == app.PhasePendingApproval || m.phase == app.PhaseBoot || m.busy {
 			return m, cmd
 		}
 		return m, nil
@@ -754,6 +782,9 @@ func (m *ui) onEvent(e app.Event) tea.Cmd {
 			},
 		}})
 		return nil
+	case app.EvBootStep:
+		m.bootStep = e.Text
+		return nil
 	case app.EvNotice:
 		m.addNote("", e.Text, false)
 		m.renderChat(true)
@@ -928,7 +959,7 @@ func (m *ui) View() string {
 			fmt.Sprintf("this instance needs pairdesk %s or newer (you have %s). run pairdesk --update.", m.app.Settings().MinVersion, m.version),
 			"q quit")
 	}
-	return m.th.Dim.Render("starting…")
+	return m.viewBoot()
 }
 
 // centered places lines in the middle of the screen.

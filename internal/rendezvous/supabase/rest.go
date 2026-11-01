@@ -643,6 +643,20 @@ func (c *Client) ApproveAdminDeviceToken(ctx context.Context, deviceID string) (
 	return tok, nil
 }
 
+// AdminTokenValid asks the server whether the admin token this client
+// sends is recognised (is_admin()). A stale token, for example after the
+// database was recreated, makes every admin command fail with 403.
+func (c *Client) AdminTokenValid(ctx context.Context) (bool, error) {
+	if _, err := c.uid(); err != nil {
+		return false, err
+	}
+	var ok bool
+	if err := c.rpc(ctx, "is_admin", nil, &ok); err != nil {
+		return false, err
+	}
+	return ok, nil
+}
+
 // BootstrapAdminDevice self-approves the very first admin device and
 // installs the returned token on this client.
 func (c *Client) BootstrapAdminDevice(ctx context.Context, deviceID, pubkey string) (string, error) {

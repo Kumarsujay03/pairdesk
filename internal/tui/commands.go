@@ -288,6 +288,6 @@ func helpFor(admin, helper bool) []string {
 			"  /admin min-version <v> · limits msgs <n> · stats · log [n] · devices [approve <id>] · groups",
 		)
 	}
-	out = append(out, "keys: tab panes · enter send · esc clear · pgup/pgdn scroll · ctrl+k stop session · ctrl+c quit")
+	out = append(out, "keys: ↑/↓ or pgup/pgdn scroll · tab panes · enter send · esc clear · ctrl+k stop session · ctrl+c quit")
 	return out
 }

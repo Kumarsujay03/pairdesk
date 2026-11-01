@@ -3,6 +3,22 @@
 All notable changes to PairDesk. The section for a tag becomes that release's notes on GitHub.
 Format: [Keep a Changelog](https://keepachangelog.com), versions follow semver.
 
+## [0.1.5] - 2026-11-01
+
+### Added
+- A real start-up screen: the banner reveals itself while the client signs in, with a spinner
+  and the current step (reaching the rendezvous, signing in, loading friends, connecting live).
+  A failed start shows the reason with `r` to retry.
+- Failed server requests are recorded in `~/.local/state/pairdesk/pairdesk.log` with method,
+  path, status and the server's code and message, never tokens or bodies.
+- `up`/`down` scroll the chat three lines at a time when the suggestion strip is closed, so long
+  output such as `/help` can be read; `pgup`/`pgdn`, `home` and `end` still work.
+
+### Fixed
+- Admin commands failed with `403 forbidden` when the server no longer recognised the device's
+  admin token, for example after the database was recreated. The client now verifies the token
+  at start-up and bootstraps a fresh one when it is stale.
+
 ## [0.1.4] - 2026-11-01
 
 ### Added
@@ -70,6 +86,7 @@ First release.
 - Peer-to-peer file drop, shared terminal, desktop notifications, self-updater, one-line installer.
 - Supabase (free tier) as rendezvous with Row Level Security and server-side functions.
 
+[0.1.5]: https://github.com/Kumarsujay03/pairdesk/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Kumarsujay03/pairdesk/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Kumarsujay03/pairdesk/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Kumarsujay03/pairdesk/compare/v0.1.1...v0.1.2

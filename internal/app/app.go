@@ -51,6 +51,12 @@ type AdminBootstrapper interface {
 	SetAdminToken(string)
 }
 
+// AdminTokenChecker is implemented by backends that can say whether the
+// admin token they hold is still recognised by the server.
+type AdminTokenChecker interface {
+	AdminTokenValid(ctx context.Context) (bool, error)
+}
+
 // Options configure the app.
 type Options struct {
 	Backend rendezvous.Backend
@@ -171,7 +177,19 @@ func (a *App) Settings() model.Settings { a.mu.RLock(); defer a.mu.RUnlock(); re
 
 // Start restores state from disk and decides the phase. It never blocks on
 // the network for long; failures fall back to PhaseNeedLogin.
+// Start prepares local state and then resumes the saved session. The TUI
+// calls the two halves separately so the screen is up while the network
+// work happens.
 func (a *App) Start(ctx context.Context) error {
+	if err := a.Prepare(); err != nil {
+		return err
+	}
+	return a.Resume(ctx)
+}
+
+// Prepare loads or forges the device identity and opens local extras. It
+// touches no network.
+func (a *App) Prepare() error {
 	id, err := a.st.Identity()
 	if errors.Is(err, store.ErrNoIdentity) {
 		id, err = a.st.CreateIdentity()
@@ -184,7 +202,14 @@ func (a *App) Start(ctx context.Context) error {
 	}
 	a.id = id
 	a.initExtras()
+	return nil
+}
 
+// Resume fetches instance settings and, when a saved session exists, signs
+// back in and loads everything needed for the ready screen. It emits
+// EvBootStep events describing progress.
+func (a *App) Resume(ctx context.Context) error {
+	a.bootStep("reaching the rendezvous")
 	if s, err := a.be.Settings(ctx); err == nil {
 		a.mu.Lock()
 		a.settings = s
@@ -200,6 +225,7 @@ func (a *App) Start(ctx context.Context) error {
 	if ab, ok := a.be.(AdminBootstrapper); ok && login.AdminToken != "" {
 		ab.SetAdminToken(login.AdminToken)
 	}
+	a.bootStep("signing in as " + login.Email)
 	sess, err := a.be.Restore(ctx, login.RefreshToken)
 	if err != nil {
 		a.log.Info("restore failed, need login", "err", err)
@@ -251,8 +277,12 @@ func (a *App) deviceID() string {
 	return fmt.Sprintf("%x", fp[:8])
 }
 
+// bootStep reports startup progress to the UI.
+func (a *App) bootStep(text string) { a.emit(Event{Kind: EvBootStep, Text: text}) }
+
 // afterAuth figures out whether the account has a username yet.
 func (a *App) afterAuth(ctx context.Context) error {
+	a.bootStep("loading your profile")
 	me, err := a.be.Me(ctx)
 	switch {
 	case errors.Is(err, rendezvous.ErrNotFound):
@@ -325,10 +355,12 @@ func (a *App) becomeReady(ctx context.Context, me model.User) error {
 		a.mu.Unlock()
 	}
 	if me.Role == model.RoleAdmin {
+		a.bootStep("checking admin device")
 		if err := a.ensureAdminDevice(ctx); err != nil {
 			a.log.Warn("admin device", "err", err)
 		}
 	}
+	a.bootStep("loading friends and groups")
 	s, err := a.be.Settings(ctx)
 	if err == nil {
 		a.mu.Lock()
@@ -379,7 +411,22 @@ func (a *App) waitForApproval() {
 // or registers this device for approval if another admin device exists.
 func (a *App) ensureAdminDevice(ctx context.Context) error {
 	if a.login.AdminToken != "" {
-		return nil
+		chk, can := a.be.(AdminTokenChecker)
+		if !can {
+			return nil
+		}
+		valid, err := chk.AdminTokenValid(ctx)
+		if err != nil || valid {
+			return err
+		}
+		// The server no longer knows this token (database recreated or the
+		// device row removed): forget it and go through bootstrap again.
+		a.log.Warn("admin token not recognised by the server; re-bootstrapping")
+		a.login.AdminToken = ""
+		if ab, ok := a.be.(AdminBootstrapper); ok {
+			ab.SetAdminToken("")
+		}
+		_ = a.st.SaveLogin(a.login)
 	}
 	ab, ok := a.be.(AdminBootstrapper)
 	if !ok {
@@ -443,6 +490,7 @@ func (a *App) loadAll(ctx context.Context) error {
 }
 
 func (a *App) connect(ctx context.Context) error {
+	a.bootStep("connecting live")
 	ch, err := a.be.Connect(ctx)
 	if err != nil {
 		return err

@@ -20,6 +20,7 @@ const (
 	EvAnnouncement   EventKind = "announcement"
 	EvKeyChanged     EventKind = "key_changed" // UserID + Text=username
 	EvNotice         EventKind = "notice"
+	EvBootStep       EventKind = "boot_step" // Text = what startup is doing now
 	EvError          EventKind = "error"
 	EvTyping         EventKind = "typing"
 	EvCard           EventKind = "card" // Card set: an access / sudo / share request needing a decision

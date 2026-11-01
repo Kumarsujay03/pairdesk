@@ -185,6 +185,21 @@ func (m *ui) onMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Without the strip, the arrows scroll the chat three lines at a time so
+	// long output such as /help can be read; the strip takes them over when
+	// it is open.
+	if len(m.sugs) == 0 && m.pane == paneChat {
+		switch key {
+		case "up":
+			m.vp.LineUp(3)
+			return m, nil
+		case "down":
+			m.vp.LineDown(3)
+			m.checkDivider()
+			return m, nil
+		}
+	}
+
 	// With the suggestion strip open, up/down pick a row and enter takes it:
 	// a command that needs nothing more runs at once, otherwise the line is
 	// filled in and the cursor waits for the argument.

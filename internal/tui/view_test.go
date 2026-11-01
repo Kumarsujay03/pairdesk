@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -372,5 +373,59 @@ func TestVersionInStatusBarAndUpdateNotice(t *testing.T) {
 		if got := newerVersion(c.tag, c.cur); got != c.want {
 			t.Errorf("newerVersion(%q,%q)=%v", c.tag, c.cur, got)
 		}
+	}
+}
+
+func TestBootScreenShowsProgressThenReady(t *testing.T) {
+	mem := memory.New()
+	ready := newTestApp(t, mem, "sujay03") // registers and reaches ready
+	st := ready.Store()
+	// A fresh App on the same store and backend resumes the saved session.
+	a2 := app.New(app.Options{Backend: mem.Client(), Store: st})
+	if err := a2.Prepare(); err != nil {
+		t.Fatal(err)
+	}
+	m := newModel(context.Background(), a2, Options{Version: "test", Boot: a2.Resume})
+	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	if v := m.View(); !strings.Contains(v, "starting") {
+		t.Fatalf("boot screen missing:\n%s", v)
+	}
+	cmd := m.Init()
+	if cmd == nil {
+		t.Fatal("Init returned no commands")
+	}
+	m.Update(evMsg{app.Event{Kind: app.EvBootStep, Text: "signing in as x@y"}})
+	if v := m.View(); !strings.Contains(v, "signing in as x@y") {
+		t.Fatalf("boot step not shown:\n%s", v)
+	}
+	m.Update(bootDoneMsg{err: errors.New("no network")})
+	if v := m.View(); !strings.Contains(v, "could not start: no network") || !strings.Contains(v, "r retry") {
+		t.Fatalf("boot error not shown:\n%s", v)
+	}
+}
+
+func TestArrowKeysScrollChatWhenStripClosed(t *testing.T) {
+	mem := memory.New()
+	admin := newTestApp(t, mem, "sujay03")
+	m := newTestUI(t, admin)
+	keys(m, "/help")
+	press(m, tea.KeyEnter)
+	if !m.vp.AtBottom() {
+		t.Fatal("expected to start at the bottom")
+	}
+	top := m.vp.YOffset
+	press(m, tea.KeyUp)
+	if m.vp.YOffset >= top {
+		t.Fatalf("up did not scroll: %d -> %d", top, m.vp.YOffset)
+	}
+	press(m, tea.KeyDown)
+	if m.vp.YOffset != top {
+		t.Fatalf("down did not scroll back: %d", m.vp.YOffset)
+	}
+	// With the strip open the arrows move the highlight instead.
+	keys(m, "/")
+	press(m, tea.KeyDown)
+	if m.sugIdx != 1 {
+		t.Fatalf("strip should own the arrows: idx=%d", m.sugIdx)
 	}
 }

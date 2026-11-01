@@ -94,21 +94,21 @@ func run(demo, reduced bool) error {
 		if url == "" || anon == "" {
 			return fmt.Errorf("no backend configured: this build has no Supabase URL baked in; set PAIRDESK_SUPABASE_URL and PAIRDESK_SUPABASE_ANON, or run with --demo")
 		}
-		be = supabase.New(supabase.Config{URL: url, AnonKey: anon})
+		be = supabase.New(supabase.Config{URL: url, AnonKey: anon, Logger: logger})
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
 	a := app.New(app.Options{Backend: be, Store: st, Logger: logger})
-	if err := a.Start(ctx); err != nil {
+	if err := a.Prepare(); err != nil {
 		logger.Error("start", "err", err)
 		return err
 	}
 	logger.Info("pairdesk starting", "version", version, "demo", demo)
 	lock := admin.NewLock(paths.Config)
 	hooks, ready := wire(a, lock)
-	return tui.RunWith(ctx, a, tui.Options{Version: version, Demo: demo, ReducedMotion: reduced, Hooks: hooks, ProgramReady: ready})
+	return tui.RunWith(ctx, a, tui.Options{Version: version, Demo: demo, ReducedMotion: reduced, Hooks: hooks, ProgramReady: ready, Boot: a.Resume})
 }
 
 // openLog writes slog output to <state>/pairdesk.log so the terminal stays

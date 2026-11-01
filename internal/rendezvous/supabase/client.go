@@ -5,6 +5,7 @@
 package supabase
 
 import (
+	"log/slog"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -28,6 +29,9 @@ type Config struct {
 	AnonKey    string
 	AdminToken string
 	HTTP       *http.Client
+	// Logger receives one warning per failed request (method, path, status,
+	// server code and message; never headers, tokens or bodies).
+	Logger *slog.Logger
 }
 
 // Client is one user's connection to the project. It is safe for
@@ -44,7 +48,8 @@ type Client struct {
 	adminToken string
 	refreshMu  sync.Mutex
 
-	rt *realtime
+	rt  *realtime
+	log *slog.Logger
 }
 
 var _ rendezvous.Backend = (*Client)(nil)
@@ -62,6 +67,10 @@ func New(cfg Config) *Client {
 		now:        time.Now,
 		refreshGap: 60 * time.Second,
 		adminToken: cfg.AdminToken,
+		log:        cfg.Logger,
+	}
+	if c.log == nil {
+		c.log = slog.Default()
 	}
 	c.rt = newRealtime(c)
 	return c
@@ -212,7 +221,14 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return parseError(resp.StatusCode, data)
+		err := parseError(resp.StatusCode, data)
+		var ae *apiError
+		if errors.As(err, &ae) {
+			c.log.Warn("request failed", "method", method, "path", path, "status", ae.Status, "code", ae.Code, "message", ae.Message)
+		} else {
+			c.log.Warn("request failed", "method", method, "path", path, "status", resp.StatusCode)
+		}
+		return err
 	}
 	if out == nil || len(bytes.TrimSpace(data)) == 0 {
 		return nil
