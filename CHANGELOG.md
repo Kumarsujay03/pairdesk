@@ -3,6 +3,16 @@
 All notable changes to PairDesk. The section for a tag becomes that release's notes on GitHub.
 Format: [Keep a Changelog](https://keepachangelog.com), versions follow semver.
 
+## [0.1.13] - 2026-11-01
+
+### Added
+- The terminal window title shows the open conversation (`pairdesk · dm · name`).
+- Live records Realtime delivers that the client cannot decode are logged instead of dropped;
+  `PAIRDESK_DEBUG_REALTIME=1` logs every raw Realtime frame to `pairdesk.log`.
+
+### Changed
+- The bytea repair for Realtime records also handles the variant that includes the `\x` prefix.
+
 ## [0.1.12] - 2026-11-01
 
 ### Fixed

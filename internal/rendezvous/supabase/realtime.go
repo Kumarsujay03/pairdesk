@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -293,7 +294,11 @@ func (r *realtime) serve(conn *websocket.Conn) error {
 		}
 		var m phxMessage
 		if json.Unmarshal(data, &m) != nil {
+			r.c.log.Warn("realtime frame not understood", "frame", clip(data, 300))
 			continue
+		}
+		if debugRealtime {
+			r.c.log.Info("realtime frame", "topic", m.Topic, "event", m.Event, "payload", clip(m.Payload, 1200))
 		}
 		r.handle(conn, m)
 	}
@@ -481,6 +486,16 @@ func (r *realtime) emitPresence(topic string) {
 	r.push(rendezvous.Event{Kind: rendezvous.EvPresence, UserID: id, Online: online})
 }
 
+// debugRealtime logs every inbound frame when PAIRDESK_DEBUG_REALTIME is set.
+var debugRealtime = os.Getenv("PAIRDESK_DEBUG_REALTIME") != ""
+
+func clip(b []byte, n int) string {
+	if len(b) > n {
+		return string(b[:n]) + "…"
+	}
+	return string(b)
+}
+
 // handleChange translates a postgres_changes frame into an Event.
 func (r *realtime) handleChange(payload json.RawMessage) {
 	var pc struct {
@@ -504,7 +519,8 @@ func (r *realtime) handleChange(payload json.RawMessage) {
 	switch pc.Data.Table {
 	case "messages":
 		var row messageRow
-		if json.Unmarshal(rec, &row) != nil {
+		if err := json.Unmarshal(rec, &row); err != nil {
+			r.c.log.Warn("realtime record not understood", "table", pc.Data.Table, "err", err, "record", clip(rec, 600))
 			return
 		}
 		m := row.model()

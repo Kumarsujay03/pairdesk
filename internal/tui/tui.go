@@ -126,8 +126,9 @@ type animTickMsg time.Time
 type slowTickMsg time.Time
 type updateMsg struct{ tag string }
 type bootDoneMsg struct {
-	err     error
-	restart bool // a release was installed; exit and re-exec
+	err         error
+	restart     bool   // a release was installed; exit and re-exec
+	windowTitle string // terminal window title to apply on the next update
 }
 
 // bootStepMsg carries one progress line from the boot goroutine.
@@ -262,6 +263,7 @@ type ui struct {
 	unlocked     func()
 	autoUpdate   func(ctx context.Context, progress func(string)) (bool, error)
 	restart      bool            // quit, then re-exec: a release was installed
+	windowTitle  string          // terminal window title to apply on the next update
 	updNote      int             // index of the in-place /update progress note, -1 when none
 	locked       bool            // waiting for the start-up passkey
 	passkey      textinput.Model // start-up passkey prompt
@@ -577,6 +579,16 @@ func (m *ui) animating() bool {
 }
 
 func (m *ui) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.windowTitle != "" {
+		title := m.windowTitle
+		m.windowTitle = ""
+		next, cmd := m.update(msg)
+		return next, tea.Batch(cmd, tea.SetWindowTitle(title))
+	}
+	return m.update(msg)
+}
+
+func (m *ui) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height

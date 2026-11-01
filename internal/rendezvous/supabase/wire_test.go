@@ -25,3 +25,17 @@ func TestUndoubleBytea(t *testing.T) {
 		t.Fatalf("plain bytea changed: %s", undoubleBytea(plain))
 	}
 }
+
+func TestUndoubleByteaWithPrefixInside(t *testing.T) {
+	// hex of the text "\x0a0b" including its prefix: 5c 78 30 61 30 62
+	in := json.RawMessage(`{"ciphertext":"\\x5c7830613062"}`)
+	var row struct {
+		Ciphertext bytea `json:"ciphertext"`
+	}
+	if err := json.Unmarshal(undoubleBytea(in), &row); err != nil {
+		t.Fatal(err)
+	}
+	if string(row.Ciphertext) != "\x0a\x0b" {
+		t.Fatalf("got %x", row.Ciphertext)
+	}
+}

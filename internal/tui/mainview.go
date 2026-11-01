@@ -62,6 +62,7 @@ func (m *ui) openConv(c *app.Conversation) {
 	}
 	m.active = c.ID
 	m.divider = ""
+	m.windowTitle = "pairdesk · " + m.convTitle()
 	if msgs, unread := m.app.Snapshot(c); unread > 0 && unread <= len(msgs) {
 		m.divider = msgs[len(msgs)-unread].ID
 	}

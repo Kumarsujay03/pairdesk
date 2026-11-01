@@ -1,6 +1,7 @@
 package supabase
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -74,7 +75,12 @@ func undoubleBytea(rec json.RawMessage) json.RawMessage {
 			continue
 		}
 		inner, err := hex.DecodeString(str[2:])
-		if err != nil || len(inner) == 0 || len(inner)%2 != 0 || !allHex(inner) {
+		if err != nil || len(inner) == 0 {
+			continue
+		}
+		// Some server versions encode the text with its \x prefix included.
+		inner = bytes.TrimPrefix(inner, []byte(`\x`))
+		if len(inner) == 0 || len(inner)%2 != 0 || !allHex(inner) {
 			continue
 		}
 		fixed, _ := json.Marshal(`\x` + string(inner))
