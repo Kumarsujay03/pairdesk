@@ -7,3 +7,9 @@
 - No new dependencies without a reason in the PR. No cgo.
 - Keep user-facing text short and plain; the TUI is the product.
 - Try the UI with `go run ./cmd/pairdesk --demo` (OTP `000000`).
+
+## Changelog and releases
+
+Every user-visible change gets a line under the next version in `CHANGELOG.md` (Added, Changed,
+Fixed, Security). A maintainer cuts a release by dating that section, tagging `vX.Y.Z` and
+pushing the tag; the workflow builds, signs and publishes with that section as the notes.
