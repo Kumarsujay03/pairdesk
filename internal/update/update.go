@@ -40,7 +40,47 @@ func Latest(ctx context.Context) (string, error) {
 	return r.TagName, nil
 }
 
+// fetchRelease resolves the latest tag from the github.com redirect, which
+// is not rate limited per IP the way the API is (shared networks hit the
+// API's 60/hour limit and get 403s). The asset URLs follow from the tag;
+// the API is only a fallback.
 func fetchRelease(ctx context.Context) (*release, error) {
+	if tag, err := latestByRedirect(ctx); err == nil && tag != "" {
+		base := "https://github.com/" + Repo + "/releases/download/" + tag + "/"
+		r := &release{TagName: tag}
+		for _, n := range []string{"pairdesk_" + runtime.GOOS + "_" + runtime.GOARCH + ".tar.gz", "checksums.txt"} {
+			r.Assets = append(r.Assets, struct {
+				Name string `json:"name"`
+				URL  string `json:"browser_download_url"`
+				Size int64  `json:"size"`
+			}{Name: n, URL: base + n})
+		}
+		return r, nil
+	}
+	return fetchReleaseAPI(ctx)
+}
+
+// ReleasesURL is the page that redirects to the newest tag; tests override it.
+var ReleasesURL = "https://github.com/" + Repo + "/releases/latest"
+
+func latestByRedirect(ctx context.Context) (string, error) {
+	req, _ := http.NewRequestWithContext(ctx, "HEAD", ReleasesURL, nil)
+	req.Header.Set("User-Agent", "pairdesk-updater")
+	c := &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := c.Do(req)
+	if err != nil {
+		return "", err
+	}
+	resp.Body.Close()
+	loc := resp.Header.Get("Location")
+	i := strings.LastIndex(loc, "/releases/tag/")
+	if resp.StatusCode/100 != 3 || i < 0 {
+		return "", fmt.Errorf("github: %s", resp.Status)
+	}
+	return loc[i+len("/releases/tag/"):], nil
+}
+
+func fetchReleaseAPI(ctx context.Context) (*release, error) {
 	req, _ := http.NewRequestWithContext(ctx, "GET", "https://api.github.com/repos/"+Repo+"/releases/latest", nil)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "pairdesk-updater")

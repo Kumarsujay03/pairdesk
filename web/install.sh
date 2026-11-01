@@ -8,8 +8,11 @@ case "$(uname -s)" in Linux) os=linux ;; *) echo "PairDesk runs on Linux only." 
 case "$(uname -m)" in x86_64|amd64) arch=amd64 ;; aarch64|arm64) arch=arm64 ;; *) echo "unsupported CPU: $(uname -m)" >&2; exit 1 ;; esac
 need() { command -v "$1" >/dev/null 2>&1 || { echo "need $1" >&2; exit 1; }; }
 need curl; need tar; need sha256sum
-tag="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)"
-[ -n "$tag" ] || { echo "could not find the latest release" >&2; exit 1; }
+# github.com/.../releases/latest redirects to the tag page; unlike the API it
+# is not rate limited per IP, so shared networks do not get 403s.
+tag="$(curl -fsSI -o /dev/null -w '%{redirect_url}' "https://github.com/$REPO/releases/latest" | sed -n 's#.*/releases/tag/##p')"
+[ -n "$tag" ] || tag="$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" | sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -1)"
+[ -n "$tag" ] || { echo "could not find the latest release (is github.com reachable?)" >&2; exit 1; }
 asset="pairdesk_${os}_${arch}.tar.gz"
 base="https://github.com/$REPO/releases/download/$tag"
 tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' EXIT

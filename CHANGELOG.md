@@ -3,6 +3,13 @@
 All notable changes to PairDesk. The section for a tag becomes that release's notes on GitHub.
 Format: [Keep a Changelog](https://keepachangelog.com), versions follow semver.
 
+## [Unreleased]
+
+### Fixed
+- The installer and `--update` find the latest release through the github.com redirect instead
+  of the GitHub API, so shared networks that exhaust the API's 60 requests/hour no longer get
+  `403 … could not find the latest release`. The API remains a fallback.
+
 ## [0.1.9] - 2026-11-01
 
 ### Changed
