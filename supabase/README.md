@@ -23,8 +23,9 @@ In **SQL Editor → New query**, paste and run each file in this order:
 2. `migrations/0002_policies.sql` – Row Level Security and column grants
 3. `migrations/0003_rpc.sql` – server-side functions, realtime policies, privilege grants
 
-Each should finish with "Success, no rows returned". If you need to start over, drop all tables
-in **Table Editor** (or `drop schema public cascade; create schema public;`) and rerun from 0001.
+Each should finish with "Success, no rows returned". If you need to start over, run
+`drop schema public cascade; create schema public;` and rerun from 0001; `0002` restores the table
+grants the drop removes.
 
 ## 3. Enable Realtime
 

@@ -1,3 +1,13 @@
+-- Base table privileges. Supabase normally grants these through default
+-- privileges, but a recreated public schema loses them, so state them
+-- explicitly. Row Level Security below is what actually gates access; the
+-- column-level revokes further down narrow these grants where needed.
+grant usage on schema public to anon, authenticated, service_role;
+grant select, insert, update, delete on all tables in schema public to authenticated, service_role;
+grant usage, select on all sequences in schema public to authenticated, service_role;
+alter default privileges for role postgres in schema public
+  grant select, insert, update, delete on tables to authenticated, service_role;
+
 alter table instance_settings enable row level security;
 alter table users             enable row level security;
 alter table admin_devices     enable row level security;
