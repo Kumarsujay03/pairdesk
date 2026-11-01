@@ -3,9 +3,16 @@
 All notable changes to PairDesk. The section for a tag becomes that release's notes on GitHub.
 Format: [Keep a Changelog](https://keepachangelog.com), versions follow semver.
 
-## [Unreleased]
+## [0.1.12] - 2026-11-01
 
 ### Fixed
+- Live messages, signals and grants arriving over Realtime failed to decrypt ("cannot decrypt")
+  because Supabase Realtime hex-encodes the text form of bytea columns a second time. The client
+  now undoes that for change records; history read over REST was never affected.
+- Supabase: the presence policy read `users.banned`, a column regular users cannot select, so
+  the presence channel was refused and nobody showed as online. Migration
+  `0007_presence_policy.sql` fixes it via a security-definer helper.
+- Refused Realtime channel joins are now logged in `pairdesk.log`.
 - Supabase: `bump_rate` named its parameter after the `bucket` column, so every message, friend
   request and signal failed with `42702 column reference "bucket" is ambiguous`. Migration
   `0006_rate_limit_fix.sql` renames the parameters; the base `0003_rpc.sql` has the same fix.

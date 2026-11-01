@@ -70,6 +70,13 @@ language sql stable security definer set search_path = public, extensions as $$
   )
 $$;
 
+-- is_admin_role is the device-token-free check used where no request header
+-- exists (realtime policies): admin role and not banned.
+create or replace function is_admin_role() returns boolean
+language sql stable security definer set search_path = public, extensions as $$
+  select exists (select 1 from users where id = auth.uid() and role = 'admin' and not banned)
+$$;
+
 create or replace function is_helper_or_admin() returns boolean
 language sql stable security definer set search_path = public, extensions as $$
   select is_admin() or exists (

@@ -57,6 +57,49 @@ func decodeBytea(s string) ([]byte, error) {
 	return nil, fmt.Errorf("bytea: unrecognised encoding")
 }
 
+// undoubleBytea repairs bytea values in a Realtime change record. Realtime
+// hex-encodes the column's *text* form, so a value that PostgREST returns as
+// "\x0a0b" arrives as "\x30613062" (the hex of "0a0b"). Decoding that
+// once yields the ASCII hex digits; this turns them back into bytes. REST
+// responses never go through here.
+func undoubleBytea(rec json.RawMessage) json.RawMessage {
+	var m map[string]json.RawMessage
+	if json.Unmarshal(rec, &m) != nil {
+		return rec
+	}
+	changed := false
+	for k, v := range m {
+		var str string
+		if json.Unmarshal(v, &str) != nil || !strings.HasPrefix(str, `\x`) {
+			continue
+		}
+		inner, err := hex.DecodeString(str[2:])
+		if err != nil || len(inner) == 0 || len(inner)%2 != 0 || !allHex(inner) {
+			continue
+		}
+		fixed, _ := json.Marshal(`\x` + string(inner))
+		m[k] = fixed
+		changed = true
+	}
+	if !changed {
+		return rec
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return rec
+	}
+	return out
+}
+
+func allHex(b []byte) bool {
+	for _, c := range b {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+			return false
+		}
+	}
+	return true
+}
+
 // ts is a timestamptz that tolerates the slightly different renderings
 // PostgREST and the realtime server use.
 type ts struct{ time.Time }

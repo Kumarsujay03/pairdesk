@@ -389,6 +389,9 @@ func (r *realtime) handle(conn *websocket.Conn, m phxMessage) {
 			track = ch.joined && r.online && m.Topic == "realtime:user:"+r.me
 		}
 		r.mu.Unlock()
+		if rep.Status != "ok" && ch != nil && m.Ref == ch.joinRef {
+			r.c.log.Warn("realtime join refused", "topic", m.Topic, "reply", string(m.Payload))
+		}
 		if track {
 			_ = r.sendPresence(conn, true)
 		}
@@ -496,6 +499,7 @@ func (r *realtime) handleChange(payload json.RawMessage) {
 	if deleted || len(rec) == 0 {
 		rec = pc.Data.OldRecord
 	}
+	rec = undoubleBytea(rec)
 	ev := rendezvous.Event{Deleted: deleted}
 	switch pc.Data.Table {
 	case "messages":

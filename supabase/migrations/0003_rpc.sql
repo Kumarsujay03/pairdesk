@@ -284,7 +284,7 @@ create policy realtime_presence_read on realtime.messages for select
     realtime.topic() like 'user:%' and (
       realtime.topic() = 'user:' || auth.uid()::text
       or are_friends(auth.uid(), substring(realtime.topic() from 6)::uuid)
-      or exists (select 1 from users where id = auth.uid() and role = 'admin' and not banned)
+      or is_admin_role()
     )
   );
 create policy realtime_presence_write on realtime.messages for insert
@@ -305,7 +305,7 @@ grant execute on function
   admin_rename(uuid, text), admin_reset_key(uuid), admin_kick(uuid),
   admin_create_invite(int, timestamptz), admin_approve_device(text), admin_bootstrap_device(text, text),
   admin_stats(), admin_user_detail(uuid), admin_list_users(), me_detail(),
-  are_friends(uuid, uuid), is_member(uuid, uuid), is_owner(uuid, uuid)
+  are_friends(uuid, uuid), is_member(uuid, uuid), is_owner(uuid, uuid), is_admin_role()
 to authenticated;
 -- are_friends / is_member / is_owner / dm_* / bump_rate / admin_log_write / housekeeping stay
 -- internal: callable only from the definer functions and policies above.
