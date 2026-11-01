@@ -4,11 +4,11 @@
 package admin
 
 import (
-	"fmt"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -42,6 +42,8 @@ type Lock struct {
 	MinLen   int // minimum passphrase length; 8 when zero
 	mu       sync.Mutex
 	unlocked time.Time
+	trusted  bool // the start-up passkey was entered this run
+	held     bool // open until Relock, no 15 minute expiry
 	fails    int
 	lastFail time.Time
 }
@@ -138,9 +140,23 @@ func (l *Lock) Unlock(pass string) error {
 	l.mu.Lock()
 	l.fails = 0
 	l.unlocked = time.Now()
+	l.held = l.trusted
 	l.mu.Unlock()
 	return nil
 }
+
+// Trust records that the user already proved themselves at start-up (the
+// optional passkey). The lock then stays open until Relock or exit instead
+// of expiring every 15 minutes, and a later Unlock holds it open again.
+func (l *Lock) Trust() {
+	l.mu.Lock()
+	l.trusted = true
+	l.held = true
+	l.mu.Unlock()
+}
+
+// Held reports whether the lock stays open until Relock.
+func (l *Lock) Held() bool { l.mu.Lock(); defer l.mu.Unlock(); return l.held }
 
 // Require returns nil if unlocked recently, ErrLocked otherwise. When no
 // passphrase is set, everything is allowed (the admin is told to set one).
@@ -150,11 +166,11 @@ func (l *Lock) Require() error {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if time.Since(l.unlocked) < unlockWindow {
+	if l.held || time.Since(l.unlocked) < unlockWindow {
 		return nil
 	}
 	return ErrLocked
 }
 
 // Relock closes the window immediately.
-func (l *Lock) Relock() { l.mu.Lock(); l.unlocked = time.Time{}; l.mu.Unlock() }
+func (l *Lock) Relock() { l.mu.Lock(); l.unlocked = time.Time{}; l.held = false; l.mu.Unlock() }

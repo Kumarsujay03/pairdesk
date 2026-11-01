@@ -1,10 +1,10 @@
 package tui
 
 import (
-	"github.com/Kumarsujay03/pairdesk/internal/update"
 	"context"
 	"errors"
 	"fmt"
+	"github.com/Kumarsujay03/pairdesk/internal/update"
 	"strconv"
 	"strings"
 	"time"
@@ -597,6 +597,9 @@ func (m *ui) execAdmin(c Command) tea.Cmd {
 				if err := m.hooks.Unlock(ctx, pw); err != nil {
 					return nil, err
 				}
+				if m.applock != nil && m.applock.IsSet() {
+					return []string{"admin commands unlocked until /admin lock or quit"}, nil
+				}
 				return []string{"admin commands unlocked for 15 minutes"}, nil
 			})
 		}, nil)
@@ -613,7 +616,10 @@ func (m *ui) execAdmin(c Command) tea.Cmd {
 					if err := m.hooks.Passphrase(ctx, old, pw); err != nil {
 						return nil, err
 					}
-					return []string{"admin passphrase set; admin and remote commands now ask for it every 15 minutes"}, nil
+					if m.applock != nil && m.applock.IsSet() {
+						return []string{"admin passphrase set; your start-up passkey counts as the unlock, so remote commands only ask after /admin lock"}, nil
+					}
+					return []string{"admin passphrase set; remote commands ask for it every 15 minutes (set /passkey to be asked only at start-up)"}, nil
 				})
 			}, nil)
 			return nil

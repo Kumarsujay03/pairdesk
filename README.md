@@ -67,7 +67,7 @@ make build             # -> ~/.local/bin/pairdesk
 | Grants | Signed by the grantor, enforced by the grantor's client, bound to the grantee's pinned key |
 | Visitor shell | User/mount/PID namespace sandbox (bubblewrap or unshare); PairDesk's own files hidden, environment scrubbed, sudo credential caching disabled; session refused if no sandbox |
 | Key pinning | Peer and admin keys pinned on first sight; a changed key blocks DMs and sessions until accepted |
-| Admin account | Email login **and** an approved device token, plus a local Argon2id passphrase for privileged commands |
+| Admin account | Email login **and** an approved device token, plus a local Argon2id passphrase for remote-access commands (asked once per launch when a start-up passkey is set) |
 | Logs | Per-line hash chain, sealed and signed by both sides |
 
 The server can deny service. It cannot read chat, join a session, impersonate a peer, mint a grant, or make a non-admin account open a session.

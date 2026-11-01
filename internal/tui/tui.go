@@ -4,12 +4,12 @@
 package tui
 
 import (
-	"github.com/Kumarsujay03/pairdesk/internal/admin"
-	"github.com/Kumarsujay03/pairdesk/internal/update"
-	"strconv"
 	"context"
 	"errors"
 	"fmt"
+	"github.com/Kumarsujay03/pairdesk/internal/admin"
+	"github.com/Kumarsujay03/pairdesk/internal/update"
+	"strconv"
 	"strings"
 	"time"
 
@@ -76,6 +76,9 @@ type Options struct {
 	// AppLock is the optional start-up passkey (/passkey set). When one is
 	// set, the boot screen asks for it before Boot runs.
 	AppLock *admin.Lock
+	// Unlocked is called once the start-up passkey has been entered, so the
+	// admin lock can stay open for the rest of the run.
+	Unlocked func()
 	// Boot, when set, is run in the background as soon as the screen is up
 	// (normally app.Resume). The boot screen shows its progress; the app's
 	// phase events take over once it finishes.
@@ -224,10 +227,11 @@ type ui struct {
 	latest       string // newer release tag, when one is known
 	boot         func(ctx context.Context) error
 	applock      *admin.Lock
+	unlocked     func()
 	locked       bool            // waiting for the start-up passkey
 	passkey      textinput.Model // start-up passkey prompt
-	bootStep     string // what startup is doing right now
-	bootErr      string // startup failure, shown with a retry hint
+	bootStep     string          // what startup is doing right now
+	bootErr      string          // startup failure, shown with a retry hint
 	announcement string
 	notes        []note
 	pending      []pendingMsg
@@ -235,7 +239,7 @@ type ui struct {
 	pulses       map[string]time.Time
 	springs      map[string]*spring
 	groupMembers map[string]map[string]bool // group id -> member ids (fetched lazily)
-	divider      string // message id the "── new ──" divider sits before
+	divider      string                     // message id the "── new ──" divider sits before
 	typingFrame  int
 	typing       []string
 	disconnected bool
@@ -274,20 +278,21 @@ func newModel(ctx context.Context, a *app.App, o Options) *ui {
 	prefs := a.Store().Prefs()
 	th, _ := theme.Load(prefs.Theme, a.Store().Paths.Config)
 	m := &ui{
-		ctx:     ctx,
-		app:     a,
-		hooks:   o.Hooks,
-		th:      th,
-		version: o.Version,
-		boot:    o.Boot,
-		applock: o.AppLock,
-		demo:    o.Demo,
-		reduced: prefs.ReducedMotion || o.ReducedMotion,
-		width:   80,
-		height:  24,
-		phase:   a.Phase(),
-		pulses:  map[string]time.Time{},
-		springs: map[string]*spring{},
+		ctx:          ctx,
+		app:          a,
+		hooks:        o.Hooks,
+		th:           th,
+		version:      o.Version,
+		boot:         o.Boot,
+		applock:      o.AppLock,
+		unlocked:     o.Unlocked,
+		demo:         o.Demo,
+		reduced:      prefs.ReducedMotion || o.ReducedMotion,
+		width:        80,
+		height:       24,
+		phase:        a.Phase(),
+		pulses:       map[string]time.Time{},
+		springs:      map[string]*spring{},
 		groupMembers: map[string]map[string]bool{},
 	}
 	m.email = newInput("you@example.com", 64)

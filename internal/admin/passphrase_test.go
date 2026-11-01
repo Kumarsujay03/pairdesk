@@ -1,6 +1,9 @@
 package admin
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestLock(t *testing.T) {
 	l := NewLock(t.TempDir())
@@ -59,5 +62,36 @@ func TestMinLenIsPerLock(t *testing.T) {
 	std := NewLockAt(t.TempDir() + "/b.pass")
 	if err := std.Set("", "1234567"); err == nil {
 		t.Fatal("default lock accepted 7 characters")
+	}
+}
+
+func TestTrustHoldsOpenUntilRelock(t *testing.T) {
+	l := NewLock(t.TempDir())
+	if err := l.Set("", "longenough"); err != nil {
+		t.Fatal(err)
+	}
+	l.Relock()
+	if err := l.Require(); err == nil {
+		t.Fatal("expected locked")
+	}
+	l.Trust()
+	if err := l.Require(); err != nil {
+		t.Fatal("trusted lock should be open:", err)
+	}
+	l.mu.Lock()
+	l.unlocked = time.Now().Add(-time.Hour) // the window is irrelevant while held
+	l.mu.Unlock()
+	if err := l.Require(); err != nil {
+		t.Fatal("held lock expired:", err)
+	}
+	l.Relock()
+	if err := l.Require(); err == nil {
+		t.Fatal("relock should close a held lock")
+	}
+	if err := l.Unlock("longenough"); err != nil {
+		t.Fatal(err)
+	}
+	if !l.Held() {
+		t.Fatal("unlock after trust should hold again")
 	}
 }

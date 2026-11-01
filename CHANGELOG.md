@@ -3,6 +3,13 @@
 All notable changes to PairDesk. The section for a tag becomes that release's notes on GitHub.
 Format: [Keep a Changelog](https://keepachangelog.com), versions follow semver.
 
+## [0.1.9] - 2026-11-01
+
+### Changed
+- With a start-up passkey set, entering it at launch unlocks the admin passphrase for the whole
+  run instead of every 15 minutes. `/admin lock` still relocks until the next `/admin unlock`.
+  Without a passkey the 15 minute window is unchanged.
+
 ## [0.1.8] - 2026-11-01
 
 ### Changed

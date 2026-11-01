@@ -205,6 +205,9 @@ func (m *ui) onLoginKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.errLine = ""
 				m.locked = false
 				m.passkey.Blur()
+				if m.unlocked != nil {
+					m.unlocked()
+				}
 				return m, tea.Batch(m.runBoot(), m.spin.Tick)
 			}
 			var cmd tea.Cmd

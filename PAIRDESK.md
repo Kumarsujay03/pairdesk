@@ -138,8 +138,9 @@ The admin is the most valuable account on the instance, so it gets extra locks:
   admin device (`/admin devices approve`). The role check in RLS is `role = admin AND device_id IN
   admin_devices`.
 - **Admin passphrase.** `/admin …` commands and every remote-access command ask for a local
-  passphrase (Argon2id, stored only on the admin's machine) once per 15 minutes. A stolen unlocked
-  terminal cannot board anyone.
+  passphrase (Argon2id, stored only on the admin's machine) once per 15 minutes, or once per launch
+  when a start-up passkey (`/passkey set`) already guards the terminal. A stolen unlocked terminal
+  cannot board anyone.
 - **Pinned admin key on every client.** Clients only treat an incoming session request as "from the
   admin" if it is signed by the admin key they have pinned. A rogue database row claiming
   `role = admin` for another account is ignored.
@@ -825,7 +826,8 @@ The build follows this document with these concrete choices, each made for relia
 - **Admin second factor** is a device token minted by the database on first admin run and sent as a
   request header; `is_admin()` checks it on every privileged query. Additional admin devices are
   approved from an existing one. The admin passphrase (Argon2id, local) gates admin and remote
-  commands for 15 minutes per unlock (`/admin pass`, `/admin unlock`, `/admin lock`).
+  commands for 15 minutes per unlock (`/admin pass`, `/admin unlock`, `/admin lock`); with a
+  start-up passkey set, entering it at launch counts as the unlock for the whole run.
 - **File drop** is chunked over a WebRTC data channel with per-chunk hashes, resumable, and group
   files are fetched rarest-first from every online member who has announced a copy (`/send #group
   path`, then `/get <id>`).

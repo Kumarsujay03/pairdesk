@@ -110,7 +110,7 @@ func run(demo, reduced bool) error {
 	applock := admin.NewLockAt(filepath.Join(paths.Config, "app.pass"))
 	applock.MinLen = 4 // guards this terminal only; guesses are rate limited
 	hooks, ready := wire(a, lock)
-	return tui.RunWith(ctx, a, tui.Options{Version: version, Demo: demo, ReducedMotion: reduced, Hooks: hooks, ProgramReady: ready, Boot: a.Resume, AppLock: applock})
+	return tui.RunWith(ctx, a, tui.Options{Version: version, Demo: demo, ReducedMotion: reduced, Hooks: hooks, ProgramReady: ready, Boot: a.Resume, AppLock: applock, Unlocked: lock.Trust})
 }
 
 // openLog writes slog output to <state>/pairdesk.log so the terminal stays
