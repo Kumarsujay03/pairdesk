@@ -3,7 +3,7 @@
 A terminal messenger for Linux people, with consent-gated remote access.
 
 ```
-curl -fsSL https://pairdesk.is-a.dev/install.sh | sh
+curl -fsSL https://kumarsujay03.github.io/pairdesk/install.sh | sh
 pairdesk
 ```
 
@@ -37,7 +37,7 @@ commands are only suggested to those roles. `/update` installs the latest releas
 ## Building
 
 ```
-go build -ldflags "-X main.supabaseURL=https://xxx.supabase.co -X main.supabaseAnon=eyJ..." ./cmd/pairdesk
+go build -ldflags "-X main.supabaseURL=https://xxx.supabase.co -X main.supabaseAnon=sb_publishable_..." ./cmd/pairdesk
 ```
 
 `pairdesk --demo` runs against an in-memory backend with no network (OTP is `000000`), useful for trying the UI.
