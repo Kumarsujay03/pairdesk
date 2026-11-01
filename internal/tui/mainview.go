@@ -32,7 +32,7 @@ func (m *ui) layout() {
 	inner := right - 2 // borders
 	m.input.Width = inner - 3
 	m.masked.Width = inner - 3
-	extra := 1 + 1 // typing line + input line
+	extra := 1 + 1 + len(m.sugs) // typing line + input line + suggestions
 	if cs := m.renderCards(inner); cs != "" {
 		extra += lipgloss.Height(cs)
 	}
@@ -536,6 +536,17 @@ func (m *ui) viewRight(height int) string {
 		tl = " "
 	}
 	parts = append(parts, tl)
+	for i, sg := range m.sugs {
+		line := fmt.Sprintf("  %-40s %s", sg.Usage, sg.Desc)
+		if len(line) > inner {
+			line = line[:inner]
+		}
+		if i == m.sugIdx {
+			parts = append(parts, m.th.Focused.Render("▸")+m.th.Accent.Render(line[1:]))
+		} else {
+			parts = append(parts, m.th.Dim.Render(line))
+		}
+	}
 	if m.sudoAsk == nil {
 		parts = append(parts, m.input.View())
 	} else {

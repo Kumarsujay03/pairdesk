@@ -266,3 +266,43 @@ func TestNonAdminCommands(t *testing.T) {
 		t.Errorf("status hints missing")
 	}
 }
+
+func TestSuggestionStripAndTabComplete(t *testing.T) {
+	mem := memory.New()
+	admin := newTestApp(t, mem, "sujay03")
+	user := newTestApp(t, mem, "priya")
+
+	// A user typing "/" sees a strip without admin commands; tab completes.
+	m := newTestUI(t, user)
+	keys(m, "/ad")
+	v := m.View()
+	if !strings.Contains(v, "/add <user>") {
+		t.Fatalf("suggestion strip missing:\n%s", v)
+	}
+	if strings.Contains(v, "/admin") {
+		t.Fatalf("user shown admin command:\n%s", v)
+	}
+	press(m, tea.KeyTab)
+	if got := m.input.Value(); got != "/add " {
+		t.Fatalf("tab completed to %q", got)
+	}
+	if m.pane != paneChat {
+		t.Fatalf("tab switched panes while completing")
+	}
+	keys(m, "x")
+	if len(m.sugs) != 0 {
+		t.Fatalf("strip should clear once arguments start: %v", m.sugs)
+	}
+
+	// The admin sees /admin subcommands and tab cycles through them.
+	am := newTestUI(t, admin)
+	keys(am, "/admin re")
+	if v := am.View(); !strings.Contains(v, "/admin reg open|closed|invite") {
+		t.Fatalf("admin subcommand strip missing:\n%s", v)
+	}
+	press(am, tea.KeyTab)
+	press(am, tea.KeyTab)
+	if got := am.input.Value(); got != "/admin reset-key " {
+		t.Fatalf("second tab = %q", got)
+	}
+}

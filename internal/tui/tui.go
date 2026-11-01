@@ -205,6 +205,9 @@ type ui struct {
 	active       string // active conversation id
 	vp           viewport.Model
 	input        textinput.Model
+	sugs         []Suggestion // completion strip above the input
+	sugIdx       int
+	sugBase      string // line that started a tab-completion cycle
 	announcement string
 	notes        []note
 	pending      []pendingMsg
@@ -284,6 +287,9 @@ func newModel(ctx context.Context, a *app.App, o Options) *ui {
 	m.focusForPhase()
 	return m
 }
+
+// maxSuggestions caps the completion strip height.
+const maxSuggestions = 6
 
 func newInput(placeholder string, limit int) textinput.Model {
 	ti := textinput.New()

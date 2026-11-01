@@ -71,6 +71,20 @@ func (m *ui) onMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.hooks.Stop(ctx)
 		}, m.hooks.Stop != nil)
 	case "tab", "shift+tab":
+		if key == "tab" && m.pane == paneChat && len(m.sugs) > 0 {
+			// Complete to the highlighted suggestion; tab again cycles through
+			// the candidates of the line that started the completion.
+			cur := m.input.Value()
+			if m.sugBase == "" {
+				m.sugBase = cur
+			}
+			if cur == m.sugs[m.sugIdx].Text && len(m.sugs) > 1 {
+				m.sugIdx = (m.sugIdx + 1) % len(m.sugs)
+			}
+			m.input.SetValue(m.sugs[m.sugIdx].Text)
+			m.input.CursorEnd()
+			return m, nil
+		}
 		if m.pane == paneLeft {
 			m.pane = paneChat
 			m.input.Focus()
@@ -177,6 +191,7 @@ func (m *ui) onMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.input.Reset()
+		m.refreshSuggestions(true)
 		if strings.HasPrefix(text, "/") {
 			c, err := Parse(text)
 			if err != nil {
@@ -191,7 +206,31 @@ func (m *ui) onMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
+	m.refreshSuggestions(true)
 	return m, cmd
+}
+
+// refreshSuggestions recomputes the completion strip for the current input.
+// The index is kept while the candidate list is unchanged so tab can cycle.
+func (m *ui) refreshSuggestions(reset bool) {
+	var sugs []Suggestion
+	if reset {
+		m.sugBase = ""
+	}
+	if m.pane == paneChat && m.sudoAsk == nil {
+		sugs = Suggest(m.input.Value(), m.app.IsAdmin(), m.app.IsHelperOrAdmin())
+	}
+	if len(sugs) > maxSuggestions {
+		sugs = sugs[:maxSuggestions]
+	}
+	if reset || m.sugIdx >= len(sugs) {
+		m.sugIdx = 0
+	}
+	changed := len(sugs) != len(m.sugs)
+	m.sugs = sugs
+	if changed {
+		m.layout()
+	}
 }
 
 // checkDivider clears the unread divider once the user reaches the bottom.

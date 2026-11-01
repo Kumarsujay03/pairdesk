@@ -45,47 +45,134 @@ type cmdSpec struct {
 	admin bool
 	subs  []string // nil = no subcommand
 	usage string
+	desc  string
 }
 
 // boolFlags are flags that take no value.
 var boolFlags = map[string]bool{"watch-only": true, "control": true}
 
 var commands = map[string]cmdSpec{
-	"help":     {usage: "/help"},
-	"add":      {usage: "/add <user>"},
-	"requests": {usage: "/requests"},
-	"remove":   {usage: "/remove <user>"},
-	"dm":       {usage: "/dm <user>"},
-	"group":    {subs: []string{"create", "invite", "remove", "leave", "delete", "transfer", "members"}, usage: "/group create|invite|remove|leave|delete|transfer|members"},
-	"friends":  {usage: "/friends"},
-	"users":    {admin: true, usage: "/users"},
-	"me":       {usage: "/me <text>"},
-	"react":    {usage: "/react <emoji>"},
-	"verify":   {usage: "/verify <user>"},
-	"theme":    {usage: "/theme <name>"},
-	"badge":    {admin: true, usage: "/badge on|off"},
-	"grant":    {usage: "/grant <user> [--watch-only] [--sudo ask|auto]"},
-	"revoke":   {usage: "/revoke <user>"},
-	"grants":   {usage: "/grants"},
-	"quit":     {usage: "/quit"},
-	"end":      {usage: "/end"},
-	"stop":     {usage: "/stop"},
-	"board":    {admin: true, usage: "/board <user>"},
-	"watch":    {admin: true, usage: "/watch <user>"},
-	"screen":   {admin: true, usage: "/screen <user> [--control]"},
-	"share":    {admin: true, usage: "/share"},
-	"send":     {usage: "/send <user> <path>"},
-	"logs":     {usage: "/logs [replay <id>]"},
-	"search":   {usage: "/search <text>"},
-	"ban":      {admin: true, usage: "/ban <user> [reason]"},
-	"unban":    {admin: true, usage: "/unban <user>"},
+	"help":     {usage: "/help", desc: "list commands"},
+	"add":      {usage: "/add <user>", desc: "send a friend request"},
+	"requests": {usage: "/requests", desc: "pending friend requests"},
+	"remove":   {usage: "/remove <user>", desc: "remove a friend"},
+	"dm":       {usage: "/dm <user>", desc: "open a direct chat"},
+	"group":    {subs: []string{"create", "invite", "remove", "leave", "delete", "transfer", "members"}, usage: "/group create|invite|remove|leave|delete|transfer|members", desc: "create and manage groups"},
+	"friends":  {usage: "/friends", desc: "list friends"},
+	"users":    {admin: true, usage: "/users", desc: "everyone on this instance"},
+	"me":       {usage: "/me <text>", desc: "say something in third person"},
+	"react":    {usage: "/react <emoji>", desc: "react to the last message"},
+	"verify":   {usage: "/verify <user>", desc: "compare key fingerprints with a friend"},
+	"theme":    {usage: "/theme <name>", desc: "switch colour theme"},
+	"badge":    {admin: true, usage: "/badge on|off", desc: "show or hide your admin badge"},
+	"grant":    {usage: "/grant <user> [--watch-only] [--sudo ask|auto]", desc: "let the admin open your terminal while you are online"},
+	"revoke":   {usage: "/revoke <user>", desc: "withdraw a standing grant"},
+	"grants":   {usage: "/grants", desc: "grants you gave and hold"},
+	"quit":     {usage: "/quit", desc: "exit pairdesk"},
+	"end":      {usage: "/end", desc: "end the current session"},
+	"stop":     {usage: "/stop", desc: "kill switch: end any session on this machine"},
+	"board":    {admin: true, usage: "/board <user>", desc: "open a friend's terminal (needs consent or a grant)"},
+	"watch":    {admin: true, usage: "/watch <user>", desc: "view a friend's terminal read-only"},
+	"screen":   {admin: true, usage: "/screen <user> [--control]", desc: "view a friend's screen (always asks)"},
+	"share":    {admin: true, usage: "/share", desc: "share your terminal into a session"},
+	"send":     {usage: "/send <user> <path>", desc: "offer a file to a friend"},
+	"logs":     {usage: "/logs [replay <id>]", desc: "browse, replay and verify session logs"},
+	"search":   {usage: "/search <text>", desc: "search your message history"},
+	"ban":      {admin: true, usage: "/ban <user> [reason]", desc: "ban a user"},
+	"unban":    {admin: true, usage: "/unban <user>", desc: "lift a ban"},
 	"admin": {admin: true, subs: []string{
 		"reg", "approve", "cap", "invite", "kick", "mute", "unmute", "approve-user",
 		"helper", "reset-key", "rename", "announce", "maintenance", "min-version",
 		"limits", "stats", "log", "devices", "groups", "badge", "inspect",
 		"unlock", "lock", "pass", "sessions", "revoke-all",
-	}, usage: "/admin <subcommand>"},
-	"get": {usage: "/get <file-id>"},
+	}, usage: "/admin <subcommand>", desc: "instance administration"},
+	"get": {usage: "/get <file-id>", desc: "download an offered file"},
+	"update":  {usage: "/update", desc: "install the latest release"},
+	"version": {usage: "/version", desc: "show the running version"},
+}
+
+// subUsage documents subcommands for suggestions and /help.
+var subUsage = map[string]map[string]string{
+	"group": {
+		"create": "/group create <name>", "invite": "/group invite <user>", "remove": "/group remove <user>",
+		"leave": "/group leave", "delete": "/group delete", "transfer": "/group transfer <user>", "members": "/group members",
+	},
+	"admin": {
+		"reg": "/admin reg open|closed|invite", "approve": "/admin approve on|off", "cap": "/admin cap <n>",
+		"invite": "/admin invite new [--uses n] [--expires 7d] | list | revoke <code>",
+		"kick": "/admin kick <user>", "mute": "/admin mute <user>", "unmute": "/admin unmute <user>",
+		"approve-user": "/admin approve-user <user>", "helper": "/admin helper add|remove <user>",
+		"reset-key": "/admin reset-key <user>", "rename": "/admin rename <old> <new>", "announce": "/admin announce <text>",
+		"maintenance": "/admin maintenance on|off [msg]", "min-version": "/admin min-version <v>",
+		"limits": "/admin limits msgs <n>", "stats": "/admin stats", "log": "/admin log [n]",
+		"devices": "/admin devices [approve <id>]", "groups": "/admin groups", "badge": "/admin badge on|off",
+		"inspect": "/admin inspect <user>", "unlock": "/admin unlock", "lock": "/admin lock",
+		"pass": "/admin pass", "sessions": "/admin sessions", "revoke-all": "/admin revoke-all",
+	},
+}
+
+// Suggestion is one completion candidate for the input line.
+type Suggestion struct {
+	Text  string // what tab inserts, e.g. "/admin reg "
+	Usage string
+	Desc  string
+}
+
+// visible reports whether a command may be shown to this user. Admin-only
+// commands are never suggested to plain users; helpers see the session
+// commands they can run.
+func visible(name string, admin, helper bool) bool {
+	spec := commands[name]
+	if !spec.admin || admin {
+		return true
+	}
+	return helper && helperCommands[name]
+}
+
+// Suggest returns completions for a partially typed command line, sorted by
+// name. It returns nil for lines that are not commands or are already past
+// the point where completion helps.
+func Suggest(line string, admin, helper bool) []Suggestion {
+	if !strings.HasPrefix(line, "/") {
+		return nil
+	}
+	body := strings.TrimPrefix(line, "/")
+	fields := strings.Fields(body)
+	trailing := strings.HasSuffix(body, " ")
+	var out []Suggestion
+	switch {
+	case len(fields) == 0 || (len(fields) == 1 && !trailing):
+		prefix := ""
+		if len(fields) == 1 {
+			prefix = strings.ToLower(fields[0])
+		}
+		names := make([]string, 0, len(commands))
+		for n := range commands {
+			if strings.HasPrefix(n, prefix) && visible(n, admin, helper) {
+				names = append(names, n)
+			}
+		}
+		sort.Strings(names)
+		for _, n := range names {
+			out = append(out, Suggestion{Text: "/" + n + " ", Usage: commands[n].usage, Desc: commands[n].desc})
+		}
+	case len(fields) == 1 || (len(fields) == 2 && !trailing):
+		name := strings.ToLower(fields[0])
+		spec, ok := commands[name]
+		if !ok || spec.subs == nil || !visible(name, admin, helper) {
+			return nil
+		}
+		prefix := ""
+		if len(fields) == 2 {
+			prefix = strings.ToLower(fields[1])
+		}
+		for _, sub := range spec.subs {
+			if strings.HasPrefix(sub, prefix) {
+				out = append(out, Suggestion{Text: "/" + name + " " + sub + " ", Usage: subUsage[name][sub]})
+			}
+		}
+	}
+	return out
 }
 
 // ErrNotCommand is returned by Parse for lines that do not start with "/".
@@ -171,18 +258,19 @@ func Usage(name string) string {
 
 // helpText lists commands for /help. Admin commands are shown only to the
 // admin.
-func helpText(admin bool) []string {
+func helpText(admin bool) []string { return helpFor(admin, admin) }
+
+func helpFor(admin, helper bool) []string {
 	names := make([]string, 0, len(commands))
-	for n, s := range commands {
-		if s.admin && !admin {
-			continue
+	for n := range commands {
+		if visible(n, admin, helper) {
+			names = append(names, n)
 		}
-		names = append(names, n)
 	}
 	sort.Strings(names)
-	out := []string{"commands:"}
+	out := []string{"commands (type / and use tab to complete):"}
 	for _, n := range names {
-		out = append(out, "  "+commands[n].usage)
+		out = append(out, fmt.Sprintf("  %-44s %s", commands[n].usage, commands[n].desc))
 	}
 	if admin {
 		out = append(out,

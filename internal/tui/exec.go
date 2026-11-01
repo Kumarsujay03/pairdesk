@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"github.com/Kumarsujay03/pairdesk/internal/update"
 	"context"
 	"errors"
 	"fmt"
@@ -53,8 +54,21 @@ func (m *ui) exec(c Command) tea.Cmd {
 		}
 	}
 	switch c.Name {
+	case "version":
+		return m.say("pairdesk " + m.version)
+	case "update":
+		return m.run("", func(ctx context.Context) ([]string, error) {
+			tag, err := update.Apply(ctx, m.version, nil)
+			if err != nil {
+				if err.Error() == "already up to date" {
+					return []string{"already up to date (" + tag + ")"}, nil
+				}
+				return nil, err
+			}
+			return []string{"installed " + tag + ". quit and start pairdesk again to use it."}, nil
+		})
 	case "help":
-		return m.say(helpText(a.IsAdmin())...)
+		return m.say(helpFor(a.IsAdmin(), a.IsHelperOrAdmin())...)
 	case "quit":
 		return m.quit()
 	case "add":

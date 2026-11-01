@@ -85,3 +85,56 @@ func TestHelpHidesAdminCommands(t *testing.T) {
 		t.Fatalf("admin help misses admin commands:\n%s", admin)
 	}
 }
+
+func TestSuggestRespectsRoles(t *testing.T) {
+	names := func(sg []Suggestion) []string {
+		var out []string
+		for _, s := range sg {
+			out = append(out, s.Text)
+		}
+		return out
+	}
+	// A plain user never sees admin-only commands.
+	for _, s := range Suggest("/", false, false) {
+		if commands[strings.TrimSpace(strings.TrimPrefix(s.Text, "/"))].admin {
+			t.Fatalf("user offered admin command %q", s.Text)
+		}
+	}
+	if got := names(Suggest("/ad", false, false)); len(got) != 1 || got[0] != "/add " {
+		t.Fatalf("user /ad = %v", got)
+	}
+	// A helper sees the session commands but not /admin.
+	h := names(Suggest("/", false, true))
+	if !contains(h, "/board ") || contains(h, "/admin ") || contains(h, "/ban ") {
+		t.Fatalf("helper suggestions wrong: %v", h)
+	}
+	// The admin sees everything, including subcommands.
+	if got := names(Suggest("/admin re", true, true)); len(got) != 4 || got[0] != "/admin reg " {
+		t.Fatalf("admin /admin re = %v", got)
+	}
+	if got := Suggest("/admin ", false, false); got != nil {
+		t.Fatalf("user got admin subcommands: %v", got)
+	}
+	if got := Suggest("/add someone", true, true); got != nil {
+		t.Fatalf("args should not be completed: %v", got)
+	}
+	for sub := range subUsage["admin"] {
+		if !contains(commands["admin"].subs, sub) {
+			t.Fatalf("subUsage lists unknown admin sub %q", sub)
+		}
+	}
+	for _, sub := range commands["admin"].subs {
+		if subUsage["admin"][sub] == "" {
+			t.Fatalf("admin sub %q has no usage", sub)
+		}
+	}
+}
+
+func contains(list []string, s string) bool {
+	for _, x := range list {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
