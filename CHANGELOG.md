@@ -3,6 +3,12 @@
 All notable changes to PairDesk. The section for a tag becomes that release's notes on GitHub.
 Format: [Keep a Changelog](https://keepachangelog.com), versions follow semver.
 
+## [0.1.15] - 2026-11-01
+
+### Changed
+- Update downloads retry up to three times on transient network errors (handshake timeouts,
+  resets), and a failure names the file and the reason instead of printing the signed URL.
+
 ## [0.1.14] - 2026-11-01
 
 ### Fixed

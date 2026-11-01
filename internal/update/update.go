@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -206,17 +207,41 @@ func Apply(ctx context.Context, current string, progress func(string)) (string, 
 }
 
 // get downloads url (at most limit bytes), reporting progress at most a
-// few times a second.
+// few times a second. Transient network failures (handshake timeouts,
+// resets) are retried a few times; errors never echo the signed URL.
 func get(ctx context.Context, url string, limit int64, onProgress func(done, total int64)) ([]byte, error) {
+	var err error
+	for attempt := 1; attempt <= 3; attempt++ {
+		var b []byte
+		b, err = getOnce(ctx, url, limit, onProgress)
+		if err == nil {
+			return b, nil
+		}
+		if ctx.Err() != nil || attempt == 3 {
+			break
+		}
+		select {
+		case <-time.After(time.Duration(attempt) * retryDelay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return nil, err
+}
+
+// retryDelay is the base back-off between download attempts; tests zero it.
+var retryDelay = 2 * time.Second
+
+func getOnce(ctx context.Context, url string, limit int64, onProgress func(done, total int64)) ([]byte, error) {
 	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 	req.Header.Set("User-Agent", "pairdesk-updater")
 	resp, err := (&http.Client{Timeout: 5 * time.Minute}).Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("download %s: %s", shortName(url), netReason(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return nil, fmt.Errorf("download: %s", resp.Status)
+		return nil, fmt.Errorf("download %s: %s", shortName(url), resp.Status)
 	}
 	if onProgress == nil {
 		return io.ReadAll(io.LimitReader(resp.Body, limit))
@@ -240,6 +265,27 @@ func get(ctx context.Context, url string, limit int64, onProgress func(done, tot
 			return nil, err
 		}
 	}
+}
+
+// shortName is the file name part of a download URL, without query string.
+func shortName(url string) string {
+	if i := strings.IndexByte(url, '?'); i >= 0 {
+		url = url[:i]
+	}
+	return url[strings.LastIndex(url, "/")+1:]
+}
+
+// netReason strips the wrapped request/URL noise from a transport error.
+func netReason(err error) string {
+	var ue *neturl.Error
+	if errors.As(err, &ue) {
+		err = ue.Err
+	}
+	s := err.Error()
+	if i := strings.LastIndex(s, ": "); i >= 0 && strings.Contains(s[:i], "tcp") {
+		s = s[i+2:]
+	}
+	return s + " (network; it will be retried, or run /update again)"
 }
 
 func checksumMatches(sums, name, hexsum string) bool {

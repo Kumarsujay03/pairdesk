@@ -37,3 +37,31 @@ func TestLatestByRedirect(t *testing.T) {
 		t.Fatalf("assets: %+v", r.Assets)
 	}
 }
+
+func TestGetRetriesAndShortErrors(t *testing.T) {
+	old := retryDelay
+	retryDelay = 0
+	defer func() { retryDelay = old }()
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls < 3 {
+			hj, _ := w.(http.Hijacker)
+			c, _, _ := hj.Hijack()
+			c.Close() // reset the connection
+			return
+		}
+		w.Write([]byte("ok"))
+	}))
+	defer srv.Close()
+	b, err := get(context.Background(), srv.URL+"/pairdesk_linux_amd64.tar.gz?sig=secret", 1<<20, nil)
+	if err != nil || string(b) != "ok" || calls != 3 {
+		t.Fatalf("got %q %v after %d calls", b, err, calls)
+	}
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) }))
+	defer bad.Close()
+	_, err = get(context.Background(), bad.URL+"/checksums.txt?sig=secret", 1<<20, nil)
+	if err == nil || strings.Contains(err.Error(), "secret") || !strings.Contains(err.Error(), "checksums.txt") {
+		t.Fatalf("error should name the file, not the signed URL: %v", err)
+	}
+}
