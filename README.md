@@ -27,7 +27,7 @@ Full design: [PAIRDESK.md](PAIRDESK.md). Backend setup: [supabase/README.md](sup
 | `/board <user>` `/watch <user>` `/screen <user> [--control]` | admin / helper remote access |
 | `/send <user> <path>` `/share` | file drop, shared terminal |
 | `/logs` `/stop` | your session records, kill switch |
-| `/verify <user>` `/search <text>` `/theme <name>` | misc |
+| `/verify <user>` `/search <text>` `/theme <name>` `/notify on\|off` | misc |
 | `/admin …` | instance controls (admin only), see `/help` |
 
 Type `/` and a suggestion strip lists what you can run; `tab` completes and cycles. Admin and helper

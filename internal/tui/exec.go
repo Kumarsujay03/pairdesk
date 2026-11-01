@@ -160,6 +160,25 @@ func (m *ui) exec(c Command) tea.Cmd {
 			th, err := theme.Load(name, dir)
 			return themeMsg{th: th, err: err}
 		}
+	case "notify":
+		if c.Arg(0) == "" {
+			state := "off"
+			if a.NotificationsOn() {
+				state = "on"
+			}
+			return m.say("desktop notifications: " + state + " (/notify on|off); alerts always appear in this window")
+		}
+		on, err := onOff(c.Arg(0))
+		if err != nil {
+			return m.usage(c)
+		}
+		if err := a.SetNotifications(on); err != nil {
+			return m.warn(err.Error())
+		}
+		if on {
+			return m.say("desktop notifications on")
+		}
+		return m.say("desktop notifications off; alerts still appear here")
 	case "badge":
 		on, err := onOff(c.Arg(0))
 		if err != nil {

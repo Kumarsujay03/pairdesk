@@ -627,7 +627,9 @@ func TestIsolationHidesPaths(t *testing.T) {
 		t.Fatalf("shim bin writable: %q", out)
 	}
 	// Sudo still works from inside (the host runs it outside).
-	v.typeLine(t, "sudo echo viasudo; echo sudorc=$?\n")
+	// The marker is split in the typed line so the echo of the command
+	// itself cannot satisfy the wait; only the real output contains it.
+	v.typeLine(t, "sudo echo viasudo; echo sudo\"\"rc=$?\n")
 	out = v.waitOutput(t, "sudorc=")
 	if strings.Contains(out, "sudorc=0") {
 		t.Fatalf("blocked tier allowed sudo: %q", out)

@@ -34,12 +34,17 @@ func (a *App) SetFocusCheck(f func(convID string) bool) {
 	a.mu.Unlock()
 }
 
-// Notify sends a desktop notification if enabled.
+// Notify shows an alert inside the client and, when desktop notifications
+// are on (/notify on), as a desktop pop-up too.
 func (a *App) Notify(key, title, body, urgency string) {
+	a.emit(Event{Kind: EvNotice, Text: body})
 	if a.notifier != nil {
 		a.notifier.Send(key, title, body, urgency)
 	}
 }
+
+// NotificationsOn reports whether desktop pop-ups are enabled.
+func (a *App) NotificationsOn() bool { return a.st.Prefs().Notifications }
 
 // SetNotifications toggles desktop notifications.
 func (a *App) SetNotifications(on bool) error {

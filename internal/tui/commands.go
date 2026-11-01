@@ -64,6 +64,7 @@ var commands = map[string]cmdSpec{
 	"react":    {usage: "/react <emoji>", desc: "react to the last message"},
 	"verify":   {usage: "/verify <user>", desc: "compare key fingerprints with a friend"},
 	"theme":    {usage: "/theme <name>", desc: "switch colour theme"},
+	"notify":   {usage: "/notify on|off", desc: "desktop pop-ups (alerts always show here)"},
 	"badge":    {admin: true, usage: "/badge on|off", desc: "show or hide your admin badge"},
 	"grant":    {usage: "/grant <user> [--watch-only] [--sudo ask|auto]", desc: "let the admin open your terminal while you are online"},
 	"revoke":   {usage: "/revoke <user>", desc: "withdraw a standing grant"},

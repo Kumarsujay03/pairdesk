@@ -5,6 +5,7 @@ package notify
 
 import (
 	"context"
+	"strings"
 	"os"
 	"os/exec"
 	"sync"
@@ -22,6 +23,12 @@ type Notifier struct {
 // New looks up notify-send; Enabled is false when it is missing.
 func New(enabled bool) *Notifier {
 	n := &Notifier{Enabled: enabled, last: map[string]time.Time{}}
+	// Never pop desktop notifications from a test binary or when the user
+	// opted out through the environment.
+	if strings.HasSuffix(os.Args[0], ".test") || os.Getenv("PAIRDESK_NO_NOTIFY") != "" {
+		n.Enabled = false
+		return n
+	}
 	if p, err := exec.LookPath("notify-send"); err == nil {
 		n.bin = p
 	} else {

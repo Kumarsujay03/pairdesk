@@ -247,8 +247,13 @@ func TestScreenNeverAutoAcceptsAndRevokeEnds(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("revoke did not end the session")
 	}
-	if len(user.mgr.Live()) != 0 {
-		t.Fatal("session still live after revoke")
+	// The host tears down after the visitor returns; give it a moment.
+	deadline := time.Now().Add(5 * time.Second)
+	for len(user.mgr.Live()) != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("session still live after revoke")
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
