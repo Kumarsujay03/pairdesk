@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -387,6 +388,29 @@ func (m *Manager) newWriter(s *Session, role string) (*sessionlog.Writer, error)
 
 // --- visitor side ------------------------------------------------------------------
 
+// shortReason reduces a multi-line tool error (gst-launch stderr) to the
+// one line that explains it, for the card reply sent to the visitor.
+func shortReason(err error) string {
+	text := err.Error()
+	lines := strings.Split(text, "\n")
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if strings.Contains(l, "stream error") || strings.Contains(l, "not found") || strings.Contains(l, "portal") {
+			if i := strings.Index(l, "ERROR: from element"); i >= 0 {
+				if j := strings.Index(l, ": "); j >= 0 {
+					l = l[j+2:]
+				}
+			}
+			return l
+		}
+	}
+	first := strings.TrimSpace(lines[0])
+	if len(first) > 160 {
+		first = first[:160] + "…"
+	}
+	return first
+}
+
 // Request asks a friend for a session. It blocks until the session ends.
 func (m *Manager) Request(ctx context.Context, name string, kind model.SessionKind, control bool) error {
 	if !m.app.IsHelperOrAdmin() {
@@ -692,7 +716,7 @@ func (m *Manager) hostAccept(s *Session, pk crypto.PublicKey) {
 	if s.Kind == model.SessionScreen {
 		stop, err := m.startCapture(ctx, &cfg)
 		if err != nil {
-			m.replyCard(s, cardReply{Accept: false, Reason: "screen capture failed: " + err.Error()})
+			m.replyCard(s, cardReply{Accept: false, Reason: "their screen capture failed: " + shortReason(err)})
 			m.finish(s, "capture: "+err.Error())
 			return
 		}
@@ -780,8 +804,8 @@ func (m *Manager) hostTerminal(ctx context.Context, s *Session, conn *p2p.Conn, 
 		ShimDir:     shimDir,
 		Isolate:     term.IsolateRequired,
 		HiddenPaths: []string{m.app.Store().Paths.Config, m.app.Store().Paths.State, m.app.Store().Paths.Cache},
-		Env:      append(os.Environ(), "PAIRDESK_SESSION="+s.ID, "PAIRDESK_VISITOR="+s.Peer.Username),
-		OnOutput: func(_ time.Time, b []byte) { _ = w.Output(b) },
+		Env:         append(os.Environ(), "PAIRDESK_SESSION="+s.ID, "PAIRDESK_VISITOR="+s.Peer.Username),
+		OnOutput:    func(_ time.Time, b []byte) { _ = w.Output(b) },
 		OnCommand: func(c term.CommandEvent) {
 			_ = w.CommandEnd(sessionlog.Command{Time: c.Time, Cmd: c.Cmd, Cwd: c.Cwd, Exit: c.Exit, Sudo: c.Sudo, Typist: c.Typist})
 			if c.Sudo {

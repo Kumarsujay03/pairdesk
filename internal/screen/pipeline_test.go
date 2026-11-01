@@ -13,6 +13,7 @@ func TestPipeWireCaptureArgs(t *testing.T) {
 		"!", "queue", "max-size-buffers=2", "leaky=downstream",
 		"!", "videoconvert",
 		"!", "videoscale",
+		"!", "videorate", "drop-only=true",
 		"!", "video/x-raw,framerate=15/1,width=1280,pixel-aspect-ratio=1/1",
 		"!", "vp8enc", "deadline=1", "cpu-used=8", "target-bitrate=1500000", "keyframe-max-dist=30", "error-resilient=default",
 		"!", "rtpvp8pay", "pt=96", "mtu=1200",
@@ -31,6 +32,7 @@ func TestX11CaptureArgsCustomOptions(t *testing.T) {
 		"!", "queue", "max-size-buffers=2", "leaky=downstream",
 		"!", "videoconvert",
 		"!", "videoscale",
+		"!", "videorate", "drop-only=true",
 		"!", "video/x-raw,framerate=30/1",
 		"!", "vp8enc", "deadline=1", "cpu-used=8", "target-bitrate=800000", "keyframe-max-dist=30", "error-resilient=default",
 		"!", "rtpvp8pay", "pt=96", "mtu=1200",
@@ -41,7 +43,7 @@ func TestX11CaptureArgsCustomOptions(t *testing.T) {
 	}
 	// Odd widths are rounded down to even for VP8.
 	got = X11CaptureArgs(CaptureOptions{MaxWidth: 1001}, 1)
-	if got[14] != "video/x-raw,framerate=15/1,width=1000,pixel-aspect-ratio=1/1" {
+	if got[17] != "video/x-raw,framerate=15/1,width=1000,pixel-aspect-ratio=1/1" {
 		t.Errorf("odd width not rounded: %q", got[14])
 	}
 }

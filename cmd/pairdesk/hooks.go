@@ -191,6 +191,12 @@ func friendly(err error) error {
 	case errors.Is(err, admin.ErrLocked):
 		return errors.New("locked: /admin unlock first")
 	case errors.Is(err, session.ErrDenied):
+		if reason := strings.TrimPrefix(err.Error(), session.ErrDenied.Error()+": "); reason != err.Error() && reason != "" {
+			if strings.HasPrefix(reason, "their ") {
+				return errors.New("not started: " + reason)
+			}
+			return errors.New("they denied the request: " + reason)
+		}
 		return errors.New("they denied the request")
 	case errors.Is(err, session.ErrTimeout):
 		return errors.New("no answer in time")

@@ -41,6 +41,10 @@ func (o CaptureOptions) withDefaults() CaptureOptions {
 // encodeTail is the pipeline from raw video to RTP over UDP loopback, shared
 // by the PipeWire and X11 sources.
 func encodeTail(opt CaptureOptions, port int) []string {
+	// The frame rate is fixed by videorate *after* capture rather than in
+	// the caps the source negotiates: mutter's screencast streams advertise
+	// a variable rate, and asking pipewiresrc for an exact 15/1 made the
+	// server reject the format ("error set output format: -22").
 	caps := fmt.Sprintf("video/x-raw,framerate=%d/1", opt.FPS)
 	if opt.MaxWidth > 0 {
 		// videoscale honours pixel-aspect-ratio, so fixing the width keeps
@@ -52,6 +56,7 @@ func encodeTail(opt CaptureOptions, port int) []string {
 		"!", "queue", "max-size-buffers=2", "leaky=downstream",
 		"!", "videoconvert",
 		"!", "videoscale",
+		"!", "videorate", "drop-only=true",
 		"!", caps,
 		"!", "vp8enc",
 		"deadline=1", "cpu-used=8",

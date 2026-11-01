@@ -3,6 +3,15 @@
 All notable changes to PairDesk. The section for a tag becomes that release's notes on GitHub.
 Format: [Keep a Changelog](https://keepachangelog.com), versions follow semver.
 
+## [0.1.17] - 2026-11-01
+
+### Fixed
+- Screen sessions on GNOME/Wayland: the capture pipeline no longer forces a fixed frame rate on
+  the PipeWire stream (mutter rejected it with `error set output format: -22`); videorate fixes
+  the rate after capture instead.
+- When the host's screen capture fails, the visitor now sees the one-line reason
+  (`not started: their screen capture failed: …`) instead of "they denied the request".
+
 ## [0.1.16] - 2026-11-01
 
 ### Fixed
