@@ -30,7 +30,7 @@ Full design: [PAIRDESK.md](PAIRDESK.md). Backend setup: [supabase/README.md](sup
 | `/verify <user>` `/search <text>` `/theme <name>` `/notify on\|off` | misc |
 | `/admin …` | instance controls (admin only), see `/help` |
 
-Type `/` and a suggestion strip lists what you can run; `tab` completes and cycles. Admin and helper
+Type `/` and a suggestion strip lists what you can run; `up`/`down` pick, `enter` runs or fills in, `tab` completes and cycles. Admin and helper
 commands are only suggested to those roles. `/update` installs the latest release in place.
 `ctrl+c` or `/quit` exits. `ctrl+k` ends any live session on your machine.
 

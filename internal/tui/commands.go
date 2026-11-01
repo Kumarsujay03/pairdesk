@@ -119,6 +119,12 @@ type Suggestion struct {
 	Desc  string
 }
 
+// Complete reports whether the suggestion is a whole command that takes no
+// argument or subcommand, so selecting it can run it directly.
+func (s Suggestion) Complete() bool {
+	return !strings.ContainsAny(s.Usage, "<[|") && strings.TrimSpace(s.Usage) == strings.TrimSpace(s.Text)
+}
+
 // visible reports whether a command may be shown to this user. Admin-only
 // commands are never suggested to plain users; helpers see the session
 // commands they can run.

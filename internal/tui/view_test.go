@@ -306,3 +306,43 @@ func TestSuggestionStripAndTabComplete(t *testing.T) {
 		t.Fatalf("second tab = %q", got)
 	}
 }
+
+func TestSuggestionKeysKeepInputVisible(t *testing.T) {
+	mem := memory.New()
+	admin := newTestApp(t, mem, "sujay03")
+	m := newTestUI(t, admin)
+	keys(m, "/")
+	v := m.View()
+	if !strings.Contains(v, "> /") {
+		t.Fatalf("input line hidden while the strip is open:\n%s", v)
+	}
+	if h := strings.Count(v, "\n") + 1; h > 30 {
+		t.Fatalf("view grew to %d rows", h)
+	}
+	// down twice then up lands on the second row.
+	press(m, tea.KeyDown)
+	press(m, tea.KeyDown)
+	press(m, tea.KeyUp)
+	if m.sugIdx != 1 {
+		t.Fatalf("sugIdx = %d", m.sugIdx)
+	}
+	// Enter on a command with arguments fills the line and keeps the input.
+	keys(m, "ad")
+	if got := m.sugs[m.sugIdx].Text; got != "/add " {
+		t.Fatalf("expected /add selected, got %q", got)
+	}
+	press(m, tea.KeyEnter)
+	if got := m.input.Value(); got != "/add " {
+		t.Fatalf("enter should fill /add, got %q", got)
+	}
+	// Enter on an argument-less command runs it straight away.
+	press(m, tea.KeyEsc)
+	keys(m, "/frie")
+	press(m, tea.KeyEnter)
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("input not cleared after running /friends: %q", got)
+	}
+	if v := m.View(); !strings.Contains(v, "no friends") && !strings.Contains(v, "friends") {
+		t.Fatalf("/friends did not run:\n%s", v)
+	}
+}

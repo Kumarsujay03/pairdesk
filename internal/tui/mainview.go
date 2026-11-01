@@ -537,14 +537,11 @@ func (m *ui) viewRight(height int) string {
 	}
 	parts = append(parts, tl)
 	for i, sg := range m.sugs {
-		line := fmt.Sprintf("  %-40s %s", sg.Usage, sg.Desc)
-		if len(line) > inner {
-			line = line[:inner]
-		}
+		line := ansi.Truncate(fmt.Sprintf("%-40s %s", sg.Usage, sg.Desc), inner-2, "…")
 		if i == m.sugIdx {
-			parts = append(parts, m.th.Focused.Render("▸")+m.th.Accent.Render(line[1:]))
+			parts = append(parts, m.th.Accent.Render("▸ "+line))
 		} else {
-			parts = append(parts, m.th.Dim.Render(line))
+			parts = append(parts, m.th.Dim.Render("  "+line))
 		}
 	}
 	if m.sudoAsk == nil {

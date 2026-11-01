@@ -185,6 +185,37 @@ func (m *ui) onMainKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// With the suggestion strip open, up/down pick a row and enter takes it:
+	// a command that needs nothing more runs at once, otherwise the line is
+	// filled in and the cursor waits for the argument.
+	if len(m.sugs) > 0 {
+		switch key {
+		case "up":
+			m.sugIdx = (m.sugIdx + len(m.sugs) - 1) % len(m.sugs)
+			return m, nil
+		case "down":
+			m.sugIdx = (m.sugIdx + 1) % len(m.sugs)
+			return m, nil
+		case "enter":
+			sel := m.sugs[m.sugIdx]
+			if strings.TrimSpace(m.input.Value()) != strings.TrimSpace(sel.Text) {
+				if sel.Complete() {
+					m.input.Reset()
+					m.refreshSuggestions(true)
+					c, err := Parse(sel.Text)
+					if err != nil {
+						return m, m.warn(err.Error())
+					}
+					return m, m.exec(c)
+				}
+				m.input.SetValue(sel.Text)
+				m.input.CursorEnd()
+				m.refreshSuggestions(true)
+				return m, nil
+			}
+		}
+	}
+
 	if key == "enter" {
 		text := strings.TrimSpace(m.input.Value())
 		if text == "" {

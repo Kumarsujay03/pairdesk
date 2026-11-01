@@ -3,6 +3,15 @@
 All notable changes to PairDesk. The section for a tag becomes that release's notes on GitHub.
 Format: [Keep a Changelog](https://keepachangelog.com), versions follow semver.
 
+## [0.1.3] - 2026-11-01
+
+### Added
+- In the suggestion strip, `up`/`down` pick a command and `enter` runs it when it needs no
+  argument, or fills it in and waits for the argument.
+
+### Fixed
+- The suggestion strip pushed the input line out of the chat pane; the input stays visible.
+
 ## [0.1.2] - 2026-11-01
 
 ### Changed
@@ -50,6 +59,7 @@ First release.
 - Peer-to-peer file drop, shared terminal, desktop notifications, self-updater, one-line installer.
 - Supabase (free tier) as rendezvous with Row Level Security and server-side functions.
 
+[0.1.3]: https://github.com/Kumarsujay03/pairdesk/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/Kumarsujay03/pairdesk/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/Kumarsujay03/pairdesk/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/Kumarsujay03/pairdesk/releases/tag/v0.1.0
