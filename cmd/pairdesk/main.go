@@ -108,6 +108,7 @@ func run(demo, reduced bool) error {
 	logger.Info("pairdesk starting", "version", version, "demo", demo)
 	lock := admin.NewLock(paths.Config)
 	applock := admin.NewLockAt(filepath.Join(paths.Config, "app.pass"))
+	applock.MinLen = 4 // guards this terminal only; guesses are rate limited
 	hooks, ready := wire(a, lock)
 	return tui.RunWith(ctx, a, tui.Options{Version: version, Demo: demo, ReducedMotion: reduced, Hooks: hooks, ProgramReady: ready, Boot: a.Resume, AppLock: applock})
 }

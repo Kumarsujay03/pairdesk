@@ -82,7 +82,7 @@ func (m *ui) exec(c Command) tea.Cmd {
 		switch c.Arg(0) {
 		case "set":
 			ask := func(old string) tea.Cmd {
-				m.askMasked("new passkey (8+ characters)", func(pw string) tea.Cmd {
+				m.askMasked("new passkey (4+ characters)", func(pw string) tea.Cmd {
 					if err := lock.Set(old, pw); err != nil {
 						return m.warn(err.Error())
 					}

@@ -3,6 +3,11 @@
 All notable changes to PairDesk. The section for a tag becomes that release's notes on GitHub.
 Format: [Keep a Changelog](https://keepachangelog.com), versions follow semver.
 
+## [0.1.8] - 2026-11-01
+
+### Changed
+- The start-up passkey may be as short as 4 characters (the admin passphrase stays at 8).
+
 ## [0.1.7] - 2026-11-01
 
 ### Added
@@ -118,6 +123,7 @@ First release.
 - Peer-to-peer file drop, shared terminal, desktop notifications, self-updater, one-line installer.
 - Supabase (free tier) as rendezvous with Row Level Security and server-side functions.
 
+[0.1.8]: https://github.com/Kumarsujay03/pairdesk/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/Kumarsujay03/pairdesk/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/Kumarsujay03/pairdesk/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/Kumarsujay03/pairdesk/compare/v0.1.4...v0.1.5

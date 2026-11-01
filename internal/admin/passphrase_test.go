@@ -46,3 +46,18 @@ func TestRemoveNeedsThePassphrase(t *testing.T) {
 		t.Fatalf("remove: %v set=%v", err, l.IsSet())
 	}
 }
+
+func TestMinLenIsPerLock(t *testing.T) {
+	short := NewLockAt(t.TempDir() + "/a.pass")
+	short.MinLen = 4
+	if err := short.Set("", "1234"); err != nil {
+		t.Fatalf("4-char passkey refused: %v", err)
+	}
+	if err := short.Set("1234", "123"); err == nil {
+		t.Fatal("3-char passkey accepted")
+	}
+	std := NewLockAt(t.TempDir() + "/b.pass")
+	if err := std.Set("", "1234567"); err == nil {
+		t.Fatal("default lock accepted 7 characters")
+	}
+}

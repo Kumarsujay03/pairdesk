@@ -4,6 +4,7 @@
 package admin
 
 import (
+	"fmt"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
@@ -38,6 +39,7 @@ type record struct {
 // Lock guards privileged commands.
 type Lock struct {
 	path     string
+	MinLen   int // minimum passphrase length; 8 when zero
 	mu       sync.Mutex
 	unlocked time.Time
 	fails    int
@@ -70,8 +72,12 @@ func (l *Lock) IsSet() bool { _, err := os.Stat(l.path); return err == nil }
 
 // Set stores a new passphrase (requires the old one when already set).
 func (l *Lock) Set(old, pass string) error {
-	if len(pass) < 8 {
-		return errors.New("passphrase must be at least 8 characters")
+	min := l.MinLen
+	if min <= 0 {
+		min = 8
+	}
+	if len(pass) < min {
+		return fmt.Errorf("passphrase must be at least %d characters", min)
 	}
 	if l.IsSet() {
 		if err := l.check(old); err != nil {
