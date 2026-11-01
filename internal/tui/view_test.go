@@ -387,6 +387,7 @@ func TestBootScreenShowsProgressThenReady(t *testing.T) {
 	if err := a2.Prepare(); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(a2.Close)
 	m := newModel(context.Background(), a2, Options{Version: "test", Boot: a2.Resume})
 	m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 	if v := m.View(); !strings.Contains(v, "starting") {
