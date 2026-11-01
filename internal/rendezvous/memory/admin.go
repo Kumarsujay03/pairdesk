@@ -410,5 +410,5 @@ func (c *Client) ApproveAdminDevice(_ context.Context, deviceID string) error {
 
 func (s *Store) emitUser(u *model.User) {
 	row := copyUser(u)
-	s.deliver(rendezvous.Event{Kind: rendezvous.EvUser, User: &row}, only(u.ID))
+	s.deliver(rendezvous.Event{Kind: rendezvous.EvUser, User: &row}, s.selfAndAdmins(u.ID))
 }

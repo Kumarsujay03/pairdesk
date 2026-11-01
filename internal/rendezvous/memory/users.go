@@ -88,6 +88,8 @@ func (c *Client) Register(_ context.Context, username, pubkey, inviteCode string
 		invite.UsesLeft--
 	}
 	s.users[id] = u
+	row := copyUser(u)
+	s.deliver(rendezvous.Event{Kind: rendezvous.EvUser, User: &row}, s.selfAndAdmins(u.ID))
 	return copyUser(u), nil
 }
 
@@ -209,6 +211,6 @@ func (c *Client) UpdatePubKey(_ context.Context, pubkey string) error {
 		s.deliver(rendezvous.Event{Kind: rendezvous.EvSettings, Settings: &settings}, everyone)
 	}
 	row := copyUser(u)
-	s.deliver(rendezvous.Event{Kind: rendezvous.EvUser, User: &row}, only(u.ID))
+	s.deliver(rendezvous.Event{Kind: rendezvous.EvUser, User: &row}, s.selfAndAdmins(u.ID))
 	return nil
 }

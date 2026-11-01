@@ -3,6 +3,18 @@
 All notable changes to PairDesk. The section for a tag becomes that release's notes on GitHub.
 Format: [Keep a Changelog](https://keepachangelog.com), versions follow semver.
 
+## [0.1.6] - 2026-11-01
+
+### Added
+- Approval queue for the admin: a notice (and desktop pop-up) the moment someone registers
+  while approval is required, `/admin pending` to list who is waiting, a `pending` tag in the
+  everyone list, and a count of waiting sign-ups at start-up.
+
+### Fixed
+- `supabase/migrations/0005_anon_settings.sql` (run once): the client could not read instance
+  settings before signing in, so "registration closed" and maintenance notices only appeared
+  after login.
+
 ## [0.1.5] - 2026-11-01
 
 ### Added
@@ -95,6 +107,7 @@ First release.
 - Peer-to-peer file drop, shared terminal, desktop notifications, self-updater, one-line installer.
 - Supabase (free tier) as rendezvous with Row Level Security and server-side functions.
 
+[0.1.6]: https://github.com/Kumarsujay03/pairdesk/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/Kumarsujay03/pairdesk/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/Kumarsujay03/pairdesk/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/Kumarsujay03/pairdesk/compare/v0.1.2...v0.1.3

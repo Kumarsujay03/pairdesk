@@ -606,6 +606,21 @@ func (m *ui) execAdmin(c Command) tea.Cmd {
 			return m.warn("usage: /admin limits msgs <n>")
 		}
 		return m.run("", ok(fmt.Sprintf("rate limit: %d messages/min", n), func(ctx context.Context) error { return a.SetRateLimit(ctx, n) }))
+	case "pending":
+		return m.run("", func(ctx context.Context) ([]string, error) {
+			us, err := a.PendingUsers(ctx)
+			if err != nil {
+				return nil, err
+			}
+			if len(us) == 0 {
+				return []string{"nobody is waiting for approval"}, nil
+			}
+			out := []string{fmt.Sprintf("%d waiting for approval (/admin approve-user <name>, /admin kick <name> to refuse):", len(us))}
+			for _, u := range us {
+				out = append(out, fmt.Sprintf("  %-20s registered %s", u.Username, u.CreatedAt.Local().Format("Jan 02 15:04")))
+			}
+			return out, nil
+		})
 	case "stats":
 		return m.run("", func(ctx context.Context) ([]string, error) {
 			s, err := a.Stats(ctx)

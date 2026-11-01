@@ -229,6 +229,18 @@ func (s *Store) deliver(ev rendezvous.Event, want func(userID string) bool) {
 
 func everyone(string) bool { return true }
 
+// selfAndAdmins matches the user and every admin, for user-row changes the
+// admin needs to see live (sign-ups waiting for approval, moderation).
+func (s *Store) selfAndAdmins(id string) func(string) bool {
+	return func(uid string) bool {
+		if uid == id {
+			return true
+		}
+		u, ok := s.users[uid]
+		return ok && u.Role == model.RoleAdmin
+	}
+}
+
 func only(ids ...string) func(string) bool {
 	set := make(map[string]struct{}, len(ids))
 	for _, id := range ids {

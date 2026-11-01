@@ -362,8 +362,14 @@ func (m *ui) viewLeft(height int) string {
 		var tag string
 		if m.everyone {
 			for _, u := range m.allUsers {
-				if u.User.ID == it.user && u.User.Banned {
+				if u.User.ID != it.user {
+					continue
+				}
+				switch {
+				case u.User.Banned:
 					tag = "banned"
+				case !u.User.Approved:
+					tag = "pending"
 				}
 			}
 		}

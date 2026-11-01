@@ -82,7 +82,7 @@ var commands = map[string]cmdSpec{
 	"ban":      {admin: true, usage: "/ban <user> [reason]", desc: "ban a user"},
 	"unban":    {admin: true, usage: "/unban <user>", desc: "lift a ban"},
 	"admin": {admin: true, subs: []string{
-		"reg", "approve", "cap", "invite", "kick", "mute", "unmute", "approve-user",
+		"reg", "approve", "cap", "invite", "kick", "mute", "unmute", "approve-user", "pending",
 		"helper", "reset-key", "rename", "announce", "maintenance", "min-version",
 		"limits", "stats", "log", "devices", "groups", "badge", "inspect",
 		"unlock", "lock", "pass", "sessions", "revoke-all",
@@ -102,7 +102,7 @@ var subUsage = map[string]map[string]string{
 		"reg": "/admin reg open|closed|invite", "approve": "/admin approve on|off", "cap": "/admin cap <n>",
 		"invite": "/admin invite new [--uses n] [--expires 7d] | list | revoke <code>",
 		"kick": "/admin kick <user>", "mute": "/admin mute <user>", "unmute": "/admin unmute <user>",
-		"approve-user": "/admin approve-user <user>", "helper": "/admin helper add|remove <user>",
+		"approve-user": "/admin approve-user <user>", "pending": "/admin pending", "helper": "/admin helper add|remove <user>",
 		"reset-key": "/admin reset-key <user>", "rename": "/admin rename <old> <new>", "announce": "/admin announce <text>",
 		"maintenance": "/admin maintenance on|off [msg]", "min-version": "/admin min-version <v>",
 		"limits": "/admin limits msgs <n>", "stats": "/admin stats", "log": "/admin log [n]",
@@ -283,7 +283,7 @@ func helpFor(admin, helper bool) []string {
 		out = append(out,
 			"  /admin reg open|closed|invite · approve on|off · cap <n>",
 			"  /admin invite new [--uses n] [--expires 7d] · invite list · invite revoke <code>",
-			"  /admin kick|mute|unmute|approve-user|reset-key <user> · rename <old> <new>",
+			"  /admin pending · kick|mute|unmute|approve-user|reset-key <user> · rename <old> <new>",
 			"  /admin helper add|remove <user> · announce <text> · maintenance on|off [msg]",
 			"  /admin min-version <v> · limits msgs <n> · stats · log [n] · devices [approve <id>] · groups",
 		)

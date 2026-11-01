@@ -24,6 +24,7 @@ In **SQL Editor → New query**, paste and run each file in this order:
 3. `migrations/0003_rpc.sql` – server-side functions, realtime policies, privilege grants
 4. `migrations/0004_policy_fixes.sql` – policy corrections (group creation, key publishing,
    ownership transfer, replies to the admin)
+5. `migrations/0005_anon_settings.sql` – lets the client read instance settings before sign-in
 
 Already running an instance? Run only the migrations you have not applied yet; each is safe to
 run once on top of the previous ones.

@@ -125,7 +125,10 @@ func (r *realtime) connect(ctx context.Context) (<-chan rendezvous.Event, error)
 	r.events = make(chan rendezvous.Event, 256)
 	r.ctx, r.cancel = context.WithCancel(context.Background())
 	r.done = make(chan struct{})
-	r.channels["realtime:db"] = &channel{topic: "realtime:db", config: dbConfig(me), presence: map[string]int{}}
+	r.c.mu.RLock()
+	admin := r.c.adminToken != ""
+	r.c.mu.RUnlock()
+	r.channels["realtime:db"] = &channel{topic: "realtime:db", config: dbConfig(me, admin), presence: map[string]int{}}
 	r.mu.Unlock()
 
 	conn, err := r.dial(ctx)
@@ -141,14 +144,21 @@ func (r *realtime) connect(ctx context.Context) (<-chan rendezvous.Event, error)
 	return r.events, nil
 }
 
-func dbConfig(me string) map[string]any {
+// dbConfig lists the table changes to follow. A normal device follows only
+// its own users row; an admin device follows every row so new sign-ups and
+// moderation changes arrive live (RLS still limits what is delivered).
+func dbConfig(me string, admin bool) map[string]any {
 	changes := []map[string]any{}
 	for _, t := range []string{"messages", "friendships", "groups", "group_members", "grants", "instance_settings"} {
 		changes = append(changes, map[string]any{"event": "*", "schema": "public", "table": t})
 	}
+	users := map[string]any{"event": "*", "schema": "public", "table": "users", "filter": "id=eq." + me}
+	if admin {
+		users = map[string]any{"event": "*", "schema": "public", "table": "users"}
+	}
 	changes = append(changes,
 		map[string]any{"event": "*", "schema": "public", "table": "signals", "filter": "to_user=eq." + me},
-		map[string]any{"event": "*", "schema": "public", "table": "users", "filter": "id=eq." + me},
+		users,
 	)
 	return map[string]any{
 		"postgres_changes": changes,

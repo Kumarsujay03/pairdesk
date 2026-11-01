@@ -1,6 +1,7 @@
 package app
 
 import (
+	"strings"
 	"context"
 	"testing"
 	"time"
@@ -429,5 +430,43 @@ func TestSearchIndexesDecryptedHistory(t *testing.T) {
 	hits, _ = arjun.Search("broken", "", 10)
 	if len(hits) != 1 {
 		t.Fatal("sender side not indexed")
+	}
+}
+
+func TestAdminSeesPendingSignups(t *testing.T) {
+	h := newHarness(t)
+	admin := h.user("a@x", "sujay03")
+	waitPhase(t, admin, PhaseReady)
+	if err := admin.SetApproval(h.ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	newcomer := h.user("n@x", "priya")
+	waitPhase(t, newcomer, PhasePendingApproval)
+
+	// The admin is told the moment the account appears.
+	for {
+		e := waitEvent(t, admin, EvNotice)
+		if strings.Contains(e.Text, "priya registered and is waiting for approval") {
+			break
+		}
+	}
+	us, err := admin.PendingUsers(h.ctx)
+	if err != nil || len(us) != 1 || us[0].Username != "priya" {
+		t.Fatalf("pending = %+v, %v", us, err)
+	}
+	if err := admin.SetUserFlag(h.ctx, "priya", "approved", true); err != nil {
+		t.Fatal(err)
+	}
+	// A pending account polls every few seconds; allow a couple of polls.
+	deadline := time.Now().Add(12 * time.Second)
+	for newcomer.Phase() != PhaseReady {
+		if time.Now().After(deadline) {
+			t.Fatalf("newcomer never became ready (phase %v)", newcomer.Phase())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	us, err = admin.PendingUsers(h.ctx)
+	if err != nil || len(us) != 0 {
+		t.Fatalf("still pending: %+v, %v", us, err)
 	}
 }

@@ -398,8 +398,11 @@ func (a *App) becomeReady(ctx context.Context, me model.User) error {
 	return nil
 }
 
+// waitForApproval polls our own row until the admin approves (or bans) the
+// account. A pending account has no live channel yet, so polling is the
+// only signal; three seconds keeps the wait short without hammering.
 func (a *App) waitForApproval() {
-	t := time.NewTicker(10 * time.Second)
+	t := time.NewTicker(3 * time.Second)
 	defer t.Stop()
 	for {
 		select {
@@ -515,12 +518,19 @@ func (a *App) connect(ctx context.Context) error {
 	}
 	if a.IsAdmin() {
 		if all, err := a.be.ListUsers(ctx); err == nil {
+			pending := 0
 			a.mu.Lock()
 			for _, u := range all {
 				a.users[u.ID] = u
 				a.byName[u.Username] = u.ID
+				if !u.Approved && !u.Banned {
+					pending++
+				}
 			}
 			a.mu.Unlock()
+			if pending > 0 {
+				a.emit(Event{Kind: EvNotice, Text: fmt.Sprintf("%d sign-up(s) waiting for approval: /admin pending", pending)})
+			}
 			watch = watch[:0]
 			for _, u := range all {
 				if u.ID != a.me.ID {

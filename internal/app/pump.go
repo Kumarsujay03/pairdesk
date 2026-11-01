@@ -145,7 +145,13 @@ func (a *App) handle(e rendezvous.Event) {
 	case rendezvous.EvUser:
 		if e.User == nil || e.User.ID != a.me.ID {
 			if e.User != nil {
+				a.mu.RLock()
+				_, known := a.users[e.User.ID]
+				a.mu.RUnlock()
 				a.storeUser(*e.User)
+				if !known && a.IsAdmin() {
+					go a.announceUser(e.User.ID)
+				}
 			}
 			return
 		}
@@ -163,6 +169,13 @@ func (a *App) handle(e rendezvous.Event) {
 		case e.User.Banned:
 			a.setPhase(PhaseBanned)
 			a.emit(Event{Kind: EvBanned})
+		case e.User.Approved && !old.Approved && a.Phase() == PhasePendingApproval:
+			// The admin just let us in: no need to wait for the next poll.
+			go func() {
+				ctx, cancel := context.WithTimeout(a.ctx, 30*time.Second)
+				defer cancel()
+				_ = a.becomeReady(ctx, *e.User)
+			}()
 		case !e.User.KickedAt.IsZero() && e.User.KickedAt.After(a.login.SavedAt):
 			a.emit(Event{Kind: EvKicked})
 		case e.User.PubKey == "" && old.PubKey != "":

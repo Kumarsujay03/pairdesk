@@ -22,6 +22,46 @@ func (a *App) requireAdmin() error {
 }
 
 // AllUsers lists everyone with presence (admin).
+// PendingUsers lists accounts waiting for the admin's approval.
+func (a *App) PendingUsers(ctx context.Context) ([]model.User, error) {
+	if err := a.requireAdmin(); err != nil {
+		return nil, err
+	}
+	us, err := a.be.ListUsers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []model.User
+	for _, u := range us {
+		if !u.Approved && !u.Banned {
+			out = append(out, u)
+		}
+	}
+	return out, nil
+}
+
+// announceUser tells the admin about an account that just appeared: waiting
+// for approval, or simply joined.
+func (a *App) announceUser(id string) {
+	ctx, cancel := context.WithTimeout(a.ctx, 15*time.Second)
+	defer cancel()
+	us, err := a.be.ListUsers(ctx)
+	if err != nil {
+		return
+	}
+	for _, u := range us {
+		if u.ID != id {
+			continue
+		}
+		if !u.Approved && !u.Banned {
+			a.Notify("signup:"+u.ID, "PairDesk", u.Username+" registered and is waiting for approval: /admin approve-user "+u.Username+" (or /admin pending)", "normal")
+		} else {
+			a.emit(Event{Kind: EvNotice, Text: u.Username + " joined"})
+		}
+		return
+	}
+}
+
 func (a *App) AllUsers(ctx context.Context) ([]Friend, error) {
 	if err := a.requireAdmin(); err != nil {
 		return nil, err
