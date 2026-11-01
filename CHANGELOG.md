@@ -3,6 +3,13 @@
 All notable changes to PairDesk. The section for a tag becomes that release's notes on GitHub.
 Format: [Keep a Changelog](https://keepachangelog.com), versions follow semver.
 
+## [Unreleased]
+
+### Fixed
+- Supabase: `bump_rate` named its parameter after the `bucket` column, so every message, friend
+  request and signal failed with `42702 column reference "bucket" is ambiguous`. Migration
+  `0006_rate_limit_fix.sql` renames the parameters; the base `0003_rpc.sql` has the same fix.
+
 ## [0.1.11] - 2026-11-01
 
 ### Added

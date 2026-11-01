@@ -53,20 +53,20 @@ begin
 end $$;
 
 -- Messages -------------------------------------------------------------------
-create or replace function bump_rate(bucket text, per_min int) returns boolean
+create or replace function bump_rate(p_bucket text, p_per_min int) returns boolean
 language plpgsql security definer set search_path = public, extensions as $$
 declare r rate_limits;
 begin
-  if per_min <= 0 then return true; end if;
-  insert into rate_limits(user_id, bucket) values (auth.uid(), bucket)
+  if p_per_min <= 0 then return true; end if;
+  insert into rate_limits(user_id, bucket) values (auth.uid(), p_bucket)
     on conflict (user_id, bucket) do nothing;
-  select * into r from rate_limits where user_id = auth.uid() and rate_limits.bucket = bump_rate.bucket for update;
+  select * into r from rate_limits where user_id = auth.uid() and bucket = p_bucket for update;
   if r.window_start < now() - interval '1 minute' then
-    update rate_limits set count = 1, window_start = now() where user_id = auth.uid() and rate_limits.bucket = bump_rate.bucket;
+    update rate_limits set count = 1, window_start = now() where user_id = auth.uid() and bucket = p_bucket;
     return true;
   end if;
-  if r.count >= per_min then return false; end if;
-  update rate_limits set count = count + 1 where user_id = auth.uid() and rate_limits.bucket = bump_rate.bucket;
+  if r.count >= p_per_min then return false; end if;
+  update rate_limits set count = count + 1 where user_id = auth.uid() and bucket = p_bucket;
   return true;
 end $$;
 

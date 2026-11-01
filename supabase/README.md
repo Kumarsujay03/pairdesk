@@ -25,6 +25,7 @@ In **SQL Editor → New query**, paste and run each file in this order:
 4. `migrations/0004_policy_fixes.sql` – policy corrections (group creation, key publishing,
    ownership transfer, replies to the admin)
 5. `migrations/0005_anon_settings.sql` – lets the client read instance settings before sign-in
+6. `migrations/0006_rate_limit_fix.sql` – fixes the rate limiter that blocked messages and friend requests
 
 Already running an instance? Run only the migrations you have not applied yet; each is safe to
 run once on top of the previous ones.
