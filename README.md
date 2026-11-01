@@ -34,6 +34,18 @@ Type `/` and a suggestion strip lists what you can run; `tab` completes and cycl
 commands are only suggested to those roles. `/update` installs the latest release in place.
 `ctrl+c` or `/quit` exits. `ctrl+k` ends any live session on your machine.
 
+## Verifying a release
+
+`checksums.txt` on every release is signed with the PairDesk release key, fingerprint
+`BE16D22D85EA247C0C9EC497BE61507B01994E87`. The public key is served at
+https://kumarsujay03.github.io/pairdesk/pairdesk-release.asc and lives in `web/`.
+
+```
+gpg --import pairdesk-release.asc
+gpg --verify checksums.txt.sig checksums.txt
+sha256sum -c --ignore-missing checksums.txt
+```
+
 ## Building
 
 ```
