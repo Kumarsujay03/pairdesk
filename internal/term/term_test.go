@@ -376,8 +376,8 @@ func TestSudoBlockedAllowedWithAskpass(t *testing.T) {
 		t.Fatalf("SudoPassword called %d times, want 1", pwCalls)
 	}
 	// A second sudo needs a fresh verdict and password: no caching.
-	v.typeLine(t, "sudo echo again; echo rc=$?\n")
-	v.waitOutput(t, "again")
+	v.typeLine(t, "sudo echo again; echo rc2=$?\n")
+	v.waitOutput(t, "rc2=0")
 	if got := fakeSudoReceived(t, fake); got != "hunter2\nhunter2\n" {
 		t.Fatalf("second sudo: fake sudo received %q", got)
 	}
