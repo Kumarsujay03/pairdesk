@@ -3,7 +3,7 @@
 All notable changes to PairDesk. The section for a tag becomes that release's notes on GitHub.
 Format: [Keep a Changelog](https://keepachangelog.com), versions follow semver.
 
-## [Unreleased]
+## [0.1.10] - 2026-11-01
 
 ### Fixed
 - The installer and `--update` find the latest release through the github.com redirect instead
