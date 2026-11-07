@@ -28,9 +28,9 @@ jobs:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
       - name: Release (signed)
         if: env.HAS_GPG == 'true'
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with: { version: "~> v2", args: release --clean --release-notes /tmp/notes.md }
       - name: Release (unsigned, no GPG secret configured)
         if: env.HAS_GPG != 'true'
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with: { version: "~> v2", args: release --clean --skip=sign --release-notes /tmp/notes.md }
