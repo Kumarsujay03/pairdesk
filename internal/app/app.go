@@ -70,6 +70,8 @@ type App struct {
 	st     *store.Store
 	log    *slog.Logger
 	bg     sync.WaitGroup // background goroutines Close waits for
+	bgMu   sync.Mutex     // orders spawn's bg.Add before Close's bg.Wait
+	closed bool           // set by Close under bgMu; spawn is a no-op after
 	id     *crypto.Identity
 	me     model.User
 	login  store.Login
@@ -576,6 +578,9 @@ func (a *App) Close() {
 	defer cancel()
 	_ = a.be.SetOnline(ctx, false)
 	a.cancel()
+	a.bgMu.Lock()
+	a.closed = true
+	a.bgMu.Unlock()
 	done := make(chan struct{})
 	go func() { a.bg.Wait(); close(done) }()
 	select {
@@ -585,8 +590,15 @@ func (a *App) Close() {
 	_ = a.be.Close()
 }
 
-// spawn runs fn in the background and lets Close wait for it.
+// spawn runs fn in the background and lets Close wait for it. Once Close
+// has started, fn is dropped: the context is already cancelled, and a
+// WaitGroup Add racing a Wait is a data race.
 func (a *App) spawn(fn func()) {
+	a.bgMu.Lock()
+	defer a.bgMu.Unlock()
+	if a.closed {
+		return
+	}
 	a.bg.Add(1)
 	go func() { defer a.bg.Done(); fn() }()
 }

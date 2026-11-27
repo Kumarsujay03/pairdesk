@@ -185,7 +185,9 @@ func TestDMEncryptedEndToEnd(t *testing.T) {
 	if err := admin.React(h.ctx, c2, "👍"); err != nil {
 		t.Fatal(err)
 	}
-	e = waitEvent(t, arjun, EvMessage)
+	// Skip a late echo of arjun's own "hi back" that drain may have missed.
+	for e = waitEvent(t, arjun, EvMessage); e.Msg != nil && e.Msg.Mine; e = waitEvent(t, arjun, EvMessage) {
+	}
 	if e.Msg.Kind != "reaction" || e.Msg.ReactsTo == "" {
 		t.Fatalf("reaction %+v", e.Msg)
 	}
@@ -396,7 +398,11 @@ func TestPresenceAndRestore(t *testing.T) {
 		t.Fatal("arjun should be online")
 	}
 	arjun.Close()
+	// A duplicate "online" from the presence snapshot can still be queued.
 	e := waitEvent(t, admin, EvPresence)
+	for e.UserID == arjun.Me().ID && e.Online {
+		e = waitEvent(t, admin, EvPresence)
+	}
 	if e.UserID != arjun.Me().ID || e.Online {
 		t.Fatalf("expected offline, got %+v", e)
 	}
